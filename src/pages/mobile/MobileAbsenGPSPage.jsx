@@ -99,8 +99,14 @@ export default function MobileAbsenGPSPage() {
 
   const handleAbsen = async (type) => {
     if (!coords) { setMessage({ type: 'error', text: 'Lokasi belum dideteksi. Tekan "Deteksi Lokasi" terlebih dahulu.' }); return; }
-    setSubmitting(true);
+    
     const isWithin = distance !== null && distance <= SCHOOL_GEOFENCE.radiusMeters;
+    if (!isWithin) {
+      setMessage({ type: 'error', text: `Anda berada di luar area sekolah (${distance}m). Absensi ditolak.` });
+      return;
+    }
+
+    setSubmitting(true);
     const res = await submitTeacherAttendance({
       teacherName: user?.name,
       type,
@@ -232,21 +238,21 @@ export default function MobileAbsenGPSPage() {
       </button>
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
-        <button onClick={() => handleAbsen('in')} disabled={!coords || submitting || todayRecord?.timeIn} style={{
+        <button onClick={() => handleAbsen('in')} disabled={!coords || submitting || todayRecord?.timeIn || !isWithin} style={{
           padding: '16px', borderRadius: '14px',
-          background: coords && !todayRecord?.timeIn ? '#059669' : 'rgba(0,0,0,0.05)',
+          background: coords && !todayRecord?.timeIn && isWithin ? '#059669' : 'rgba(0,0,0,0.05)',
           border: '1px solid rgba(5,150,105,0.1)',
-          color: coords && !todayRecord?.timeIn ? 'white' : '#94A3B8',
-          fontSize: '14px', fontWeight: 600, cursor: coords && !todayRecord?.timeIn ? 'pointer' : 'not-allowed',
+          color: coords && !todayRecord?.timeIn && isWithin ? 'white' : '#94A3B8',
+          fontSize: '14px', fontWeight: 600, cursor: coords && !todayRecord?.timeIn && isWithin ? 'pointer' : 'not-allowed',
         }}>
           🟢 Absen Masuk
         </button>
-        <button onClick={() => handleAbsen('out')} disabled={!coords || submitting || !todayRecord?.timeIn || todayRecord?.timeOut} style={{
+        <button onClick={() => handleAbsen('out')} disabled={!coords || submitting || !todayRecord?.timeIn || todayRecord?.timeOut || !isWithin} style={{
           padding: '16px', borderRadius: '14px',
-          background: coords && todayRecord?.timeIn && !todayRecord?.timeOut ? '#D97706' : 'rgba(0,0,0,0.05)',
+          background: coords && todayRecord?.timeIn && !todayRecord?.timeOut && isWithin ? '#D97706' : 'rgba(0,0,0,0.05)',
           border: '1px solid rgba(217,119,6,0.1)',
-          color: coords && todayRecord?.timeIn && !todayRecord?.timeOut ? 'white' : '#94A3B8',
-          fontSize: '14px', fontWeight: 600, cursor: 'pointer',
+          color: coords && todayRecord?.timeIn && !todayRecord?.timeOut && isWithin ? 'white' : '#94A3B8',
+          fontSize: '14px', fontWeight: 600, cursor: coords && todayRecord?.timeIn && !todayRecord?.timeOut && isWithin ? 'pointer' : 'not-allowed',
         }}>
           🟠 Absen Pulang
         </button>
