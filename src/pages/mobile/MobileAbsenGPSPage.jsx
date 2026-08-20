@@ -31,8 +31,21 @@ export default function MobileAbsenGPSPage() {
   const [submitting, setSubmitting] = useState(false);
   const [message, setMessage] = useState(null);
   const [todayRecord, setTodayRecord] = useState(null);
+  const [permissionStatus, setPermissionStatus] = useState('unknown'); // 'unknown' | 'granted' | 'denied' | 'prompt'
 
   const today = new Date().toISOString().split('T')[0];
+
+  /* Cek status permission GPS saat halaman dimuat */
+  useEffect(() => {
+    if (navigator.permissions && navigator.permissions.query) {
+      navigator.permissions.query({ name: 'geolocation' }).then(result => {
+        setPermissionStatus(result.state); // 'granted', 'denied', atau 'prompt'
+        result.onchange = () => setPermissionStatus(result.state);
+      }).catch(() => {
+        setPermissionStatus('unknown');
+      });
+    }
+  }, []);
 
   useEffect(() => {
     getTeacherAttendance(today).then(data => {
@@ -42,8 +55,15 @@ export default function MobileAbsenGPSPage() {
   }, [user?.name, today]);
 
   const getLocation = () => {
+    /* Cek apakah browser mendukung Geolocation API */
+    if (!navigator.geolocation) {
+      setMessage({ type: 'error', text: 'Browser Anda tidak mendukung fitur GPS/Geolocation. Gunakan browser Chrome atau Safari terbaru.' });
+      return;
+    }
+
     setLocating(true);
     setMessage(null);
+
     navigator.geolocation.getCurrentPosition(
       (pos) => {
         const { latitude, longitude } = pos.coords;
@@ -51,17 +71,34 @@ export default function MobileAbsenGPSPage() {
         const dist = Math.round(calcDistance(latitude, longitude, SCHOOL_GEOFENCE.latitude, SCHOOL_GEOFENCE.longitude));
         setDistance(dist);
         setLocating(false);
+        setPermissionStatus('granted');
+        setMessage({ type: 'success', text: `Lokasi berhasil terdeteksi! (Akurasi: ±${Math.round(pos.coords.accuracy)}m)` });
       },
       (err) => {
-        setMessage({ type: 'error', text: 'Gagal mendapatkan lokasi. Pastikan GPS aktif.' });
         setLocating(false);
+        let errorText = '';
+        switch (err.code) {
+          case err.PERMISSION_DENIED:
+            setPermissionStatus('denied');
+            errorText = '⛔ Izin lokasi DITOLAK oleh browser. Silakan aktifkan izin lokasi di pengaturan browser Anda (lihat panduan di bawah).';
+            break;
+          case err.POSITION_UNAVAILABLE:
+            errorText = '📡 Sinyal GPS tidak tersedia. Pastikan GPS/Lokasi sudah diaktifkan di pengaturan HP Anda, lalu coba lagi.';
+            break;
+          case err.TIMEOUT:
+            errorText = '⏱️ Waktu pencarian lokasi habis. Coba pindah ke area terbuka dan tekan tombol lagi.';
+            break;
+          default:
+            errorText = `Gagal mendapatkan lokasi: ${err.message}`;
+        }
+        setMessage({ type: 'error', text: errorText });
       },
-      { enableHighAccuracy: true, timeout: 10000 }
+      { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
     );
   };
 
   const handleAbsen = async (type) => {
-    if (!coords) { setMessage({ type: 'error', text: 'Lokasi belum dideteksi.' }); return; }
+    if (!coords) { setMessage({ type: 'error', text: 'Lokasi belum dideteksi. Tekan "Deteksi Lokasi" terlebih dahulu.' }); return; }
     setSubmitting(true);
     const isWithin = distance !== null && distance <= SCHOOL_GEOFENCE.radiusMeters;
     const res = await submitTeacherAttendance({
@@ -89,6 +126,32 @@ export default function MobileAbsenGPSPage() {
       <p style={{ fontSize: '13px', color: '#64748B', margin: '0 0 20px' }}>
         Absensi berbasis geolokasi sekolah
       </p>
+
+      {/* Permission Warning */}
+      {permissionStatus === 'denied' && (
+        <div style={{
+          padding: '16px', borderRadius: '16px', marginBottom: '16px',
+          background: 'rgba(239, 68, 68, 0.08)', border: '1px solid rgba(239,68,68,0.2)',
+        }}>
+          <p style={{ fontSize: '14px', fontWeight: 600, color: '#DC2626', margin: '0 0 8px' }}>
+            ⛔ Izin Lokasi Ditolak
+          </p>
+          <p style={{ fontSize: '12px', color: '#64748B', margin: '0 0 8px', lineHeight: '1.5' }}>
+            Browser memblokir akses lokasi. Untuk mengaktifkan:
+          </p>
+          <div style={{ fontSize: '12px', color: '#475569', lineHeight: '1.6' }}>
+            <div><strong>Chrome Android:</strong></div>
+            <div style={{ paddingLeft: '8px', marginBottom: '4px' }}>
+              Tap ikon 🔒 di address bar → Izin → Lokasi → Izinkan
+            </div>
+            <div><strong>Safari iOS:</strong></div>
+            <div style={{ paddingLeft: '8px', marginBottom: '4px' }}>
+              Pengaturan → Safari → Lokasi → Izinkan
+            </div>
+            <div><strong>Lalu refresh halaman ini.</strong></div>
+          </div>
+        </div>
+      )}
 
       {/* Status Card */}
       {todayRecord && (
@@ -148,6 +211,7 @@ export default function MobileAbsenGPSPage() {
           border: `1px solid ${message.type === 'success' ? 'rgba(5, 150, 105, 0.2)' : 'rgba(239, 68, 68, 0.2)'}`,
           fontSize: '13px',
           color: message.type === 'success' ? '#059669' : '#DC2626',
+          lineHeight: '1.5',
         }}>
           {message.text}
         </div>
@@ -197,3 +261,4 @@ export default function MobileAbsenGPSPage() {
     </div>
   );
 }
+
