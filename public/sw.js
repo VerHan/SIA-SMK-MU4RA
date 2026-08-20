@@ -1,30 +1,29 @@
 /* ============================================================
-   Service Worker — Offline Caching Strategy
+   Service Worker — Smart PWA Caching Strategy
    
-   Cache-first untuk static assets (CSS, JS, fonts, images)
-   Network-first untuk API calls (data selalu fresh)
+   - Network-First for HTML/Navigation & API (always fresh on deploy)
+   - Stale-While-Revalidate for static assets
+   - Safe offline fallback
    ============================================================ */
 
-const CACHE_NAME = 'sia-smk-mu4ra-v1';
+const CACHE_NAME = 'sia-smk-mu4ra-v2';
 
-/* Assets yang di-cache saat install */
+/* Assets static offline baseline */
 const STATIC_ASSETS = [
-  '/',
-  '/index.html',
   '/manifest.json',
   '/favicon.svg',
 ];
 
-/* Install — cache static assets */
+/* Install — skip waiting immediately */
 self.addEventListener('install', (event) => {
   event.waitUntil(
     caches.open(CACHE_NAME)
-      .then(cache => cache.addAll(STATIC_ASSETS))
+      .then(cache => cache.addAll(STATIC_ASSETS).catch(() => {}))
       .then(() => self.skipWaiting())
   );
 });
 
-/* Activate — hapus cache lama */
+/* Activate — clean up all previous cache versions */
 self.addEventListener('activate', (event) => {
   event.waitUntil(
     caches.keys().then(keys =>
@@ -37,20 +36,24 @@ self.addEventListener('activate', (event) => {
   );
 });
 
-/* Fetch — strategi cache */
+/* Fetch strategy */
 self.addEventListener('fetch', (event) => {
   const { request } = event;
 
-  /* Skip non-GET requests */
-  if (request.method !== 'GET') return;
+  /* Skip non-GET and chrome-extension requests */
+  if (request.method !== 'GET' || !request.url.startsWith('http')) return;
 
-  /* Network-first untuk API/data requests */
-  if (request.url.includes('/api/')) {
+  const url = new URL(request.url);
+
+  /* 1. API Requests -> Network First */
+  if (url.pathname.startsWith('/api/')) {
     event.respondWith(
       fetch(request)
         .then(response => {
-          const clone = response.clone();
-          caches.open(CACHE_NAME).then(cache => cache.put(request, clone));
+          if (response.ok) {
+            const clone = response.clone();
+            caches.open(CACHE_NAME).then(cache => cache.put(request, clone));
+          }
           return response;
         })
         .catch(() => caches.match(request))
@@ -58,9 +61,38 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  /* Cache-first untuk static assets */
+  /* 2. Navigation / HTML Requests -> Network First (Critical for avoiding White Screen on new deploy) */
+  if (request.mode === 'navigate' || request.headers.get('accept')?.includes('text/html')) {
+    event.respondWith(
+      fetch(request)
+        .then(response => {
+          if (response.ok) {
+            const clone = response.clone();
+            caches.open(CACHE_NAME).then(cache => cache.put(request, clone));
+          }
+          return response;
+        })
+        .catch(async () => {
+          const cached = await caches.match(request);
+          if (cached) return cached;
+          return caches.match('/');
+        })
+    );
+    return;
+  }
+
+  /* 3. Static Assets (JS / CSS / Images) -> Stale While Revalidate / Cache First */
   event.respondWith(
-    caches.match(request)
-      .then(cached => cached || fetch(request))
+    caches.match(request).then(cachedResponse => {
+      const fetchPromise = fetch(request).then(networkResponse => {
+        if (networkResponse.ok && request.url.startsWith(self.location.origin)) {
+          const clone = networkResponse.clone();
+          caches.open(CACHE_NAME).then(cache => cache.put(request, clone));
+        }
+        return networkResponse;
+      }).catch(() => cachedResponse);
+
+      return cachedResponse || fetchPromise;
+    })
   );
 });
