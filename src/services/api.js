@@ -408,11 +408,18 @@ export async function getTeacherAttendance(dateFilter) {
   try {
     const url = dateFilter ? `/api/guru/absen?date=${dateFilter}` : '/api/guru/absen';
     const res = await fetch(url);
-    const data = await res.json();
-    return data;
+    const contentType = res.headers.get('content-type');
+    if (res.ok && contentType && contentType.includes('application/json')) {
+      const data = await res.json();
+      return data;
+    }
+    throw new Error('Backend tidak tersedia');
   } catch (err) {
-    console.error(err);
-    return [];
+    console.warn('Fallback ke mock data untuk absensi guru:', err.message);
+    /* Fallback ke mock */
+    let data = [...teacherAttendanceList];
+    if (dateFilter) data = data.filter(a => a.tanggal === dateFilter);
+    return data;
   }
 }
 
@@ -423,13 +430,18 @@ export async function submitTeacherAttendance({ teacherName, type, distanceMeter
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ teacherName, type, distanceMeters, isWithinGeofence, coords })
     });
-    const data = await res.json();
-    if (!data.success) {
-      return { success: false, error: data.message };
+    const contentType = res.headers.get('content-type');
+    if (res.ok && contentType && contentType.includes('application/json')) {
+      const data = await res.json();
+      if (!data.success) {
+        return { success: false, error: data.message };
+      }
+      return { success: true, message: data.message };
     }
-    return { success: true, message: data.message };
+    throw new Error('Backend tidak tersedia');
   } catch (err) {
-    return { success: false, error: err.message };
+    console.warn('Fallback untuk submit absensi guru:', err.message);
+    return { success: false, error: 'Backend tidak tersedia. Data tidak tersimpan ke database.' };
   }
 }
 
