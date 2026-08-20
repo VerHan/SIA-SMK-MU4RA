@@ -23,11 +23,11 @@ export default function LoginPage() {
   const location = useLocation();
 
   /* URL tujuan setelah login (jika ada) */
-  const from = location.state?.from?.pathname || '/dashboard';
+  const customRedirect = location.state?.from?.pathname;
 
-  /* Jika sudah login, redirect ke dashboard */
+  /* Jika sudah login, redirect sesuai role */
   if (isAuthenticated) {
-    return <Navigate to={from} replace />;
+    return <Navigate to={customRedirect || '/'} replace />;
   }
 
   const handleSubmit = async (e) => {
@@ -44,9 +44,15 @@ export default function LoginPage() {
     setLoading(false);
 
     if (result.success) {
-      navigate(from, { replace: true });
+      if (customRedirect && customRedirect !== '/login') {
+        navigate(customRedirect, { replace: true });
+      } else if (result.user?.role === 'admin') {
+        navigate('/dashboard/ringkasan', { replace: true });
+      } else {
+        navigate('/app/home', { replace: true });
+      }
     } else {
-      setError(result.error);
+      setError(result.error || 'Username atau password salah.');
     }
   };
 

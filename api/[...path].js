@@ -9,7 +9,30 @@ const prisma = new PrismaClient();
 const PORT = process.env.PORT || 5000;
 
 app.use(cors());
-app.use(express.json());
+
+// Vercel Serverless-safe body parser (avoids 400 Bad Request when req.body is already parsed)
+app.use((req, res, next) => {
+  if (req.body && typeof req.body === 'object') {
+    return next();
+  }
+  express.json({ limit: '10mb' })(req, res, (err) => {
+    if (err) {
+      console.warn('express.json parser ignored error:', err.message);
+      return next();
+    }
+    next();
+  });
+});
+
+app.use((req, res, next) => {
+  if (req.body && typeof req.body === 'object') {
+    return next();
+  }
+  express.urlencoded({ extended: true, limit: '10mb' })(req, res, (err) => {
+    if (err) return next();
+    next();
+  });
+});
 
 // Endpoint untuk cek server jalan atau tidak
 app.get('/', (req, res) => {
@@ -31,15 +54,28 @@ app.get('/api/ping', async (req, res) => {
 
 // 1. Auth Login
 app.post('/api/auth/login', async (req, res) => {
-  const { username, password } = req.body;
   try {
-    const user = await prisma.user.findUnique({ where: { username } });
-    if (!user || user.password !== password) {
-      return res.status(401).json({ success: false, message: 'Username atau password salah' });
+    const { username, password } = req.body || {};
+    if (!username || !password) {
+      return res.status(400).json({ success: false, error: 'Username dan password wajib diisi' });
     }
-    res.json({ success: true, user: { id: user.id, username: user.username, name: user.name, role: user.role } });
+
+    const user = await prisma.user.findUnique({ where: { username: username.trim() } });
+    if (!user || user.password !== password) {
+      return res.status(401).json({ success: false, error: 'Username atau password salah' });
+    }
+    return res.json({
+      success: true,
+      user: {
+        id: user.id,
+        username: user.username,
+        name: user.name,
+        role: user.role
+      }
+    });
   } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
+    console.error('API /api/auth/login error:', err);
+    return res.status(500).json({ success: false, error: err.message || 'Database error' });
   }
 });
 

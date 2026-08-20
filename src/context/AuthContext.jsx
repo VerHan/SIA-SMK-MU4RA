@@ -53,14 +53,14 @@ export function AuthProvider({ children }) {
     setIsLoading(true);
     try {
       const result = await apiLogin(username, password);
-      if (result.success) {
+      if (result.success && result.user) {
         setUser(result.user);
         localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(result.user));
-        return { success: true };
+        return { success: true, user: result.user };
       }
-      return { success: false, error: result.error };
+      return { success: false, error: result.error || 'Username atau password salah.' };
     } catch (err) {
-      return { success: false, error: 'Terjadi kesalahan. Coba lagi.' };
+      return { success: false, error: 'Terjadi kesalahan jaringan. Coba lagi.' };
     } finally {
       setIsLoading(false);
     }

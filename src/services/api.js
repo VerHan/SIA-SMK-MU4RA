@@ -66,22 +66,32 @@ export async function loginUser(username, password) {
     const res = await fetch('/api/auth/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username, password })
+      body: JSON.stringify({ username: username.trim(), password })
     });
     /* Pastikan response berisi JSON sebelum parsing */
     const contentType = res.headers.get('content-type');
     if (contentType && contentType.includes('application/json')) {
       const data = await res.json();
-      return data;
+      if (!data.success) {
+        return {
+          success: false,
+          error: data.error || data.message || 'Username atau password salah.'
+        };
+      }
+      return {
+        success: true,
+        user: data.user
+      };
     }
     /* Response bukan JSON — fallback ke mock */
-    throw new Error('Backend tidak tersedia');
+    throw new Error('Backend tidak mengembalikan format JSON');
   } catch (err) {
     /* Fallback: gunakan mock data jika backend mati */
-    console.warn('Backend tidak tersedia, menggunakan data mock untuk login.');
+    console.warn('Backend login fallback ke mock:', err.message);
     await simulateNetwork();
+    const cleanUsername = (username || '').trim().toLowerCase();
     const user = MOCK_USERS.find(
-      u => u.username === username && u.password === password
+      u => u.username.toLowerCase() === cleanUsername && u.password === password
     );
     if (user) {
       const { password: _, ...safeUser } = user;
