@@ -6,7 +6,7 @@
    ============================================================ */
 
 import { useState } from 'react';
-import { useNavigate, useLocation, Link } from 'react-router-dom';
+import { useNavigate, useLocation, Link, Navigate } from 'react-router-dom';
 import { useAuth } from '../../hooks/useAuth';
 import { SCHOOL_INFO } from '../../config/constants';
 import Button from '../../components/ui/Button';
@@ -22,14 +22,13 @@ export default function LoginPage() {
   const navigate = useNavigate();
   const location = useLocation();
 
-  /* Jika sudah login, redirect ke dashboard */
-  if (isAuthenticated) {
-    navigate('/dashboard', { replace: true });
-    return null;
-  }
-
   /* URL tujuan setelah login (jika ada) */
   const from = location.state?.from?.pathname || '/dashboard';
+
+  /* Jika sudah login, redirect ke dashboard */
+  if (isAuthenticated) {
+    return <Navigate to={from} replace />;
+  }
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -122,7 +121,7 @@ export default function LoginPage() {
             color: 'var(--color-text-secondary)',
             fontSize: 'var(--font-size-sm)',
           }}>
-            {SCHOOL_INFO.name}
+            {SCHOOL_INFO?.name || 'SIA SMK Muhammadiyah 04 Bangsri'}
           </p>
         </div>
 
