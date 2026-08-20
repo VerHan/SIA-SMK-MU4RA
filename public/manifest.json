@@ -1,0 +1,18 @@
+{
+  "name": "SIA SMK Muhammadiyah 04 Bangsri",
+  "short_name": "SIA SMK MU4RA",
+  "description": "Sistem Informasi Akademik SMK Muhammadiyah 04 Bangsri",
+  "start_url": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "theme_color": "#1E40AF",
+  "background_color": "#EFF6FF",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+
+  <!-- SEO Meta Tags -->
+  <title>SIA SMK Muhammadiyah 04 Bangsri — Sistem Informasi Akademik</title>
+  <meta name="description" content="Sistem Informasi Akademik SMK Muhammadiyah 04 Bangsri. Portal informasi sekolah, absensi, jadwal, nilai, dan pembayaran." />
+  <meta name="keywords" content="SMK Muhammadiyah 04 Bangsri, SIA, Sistem Informasi Akademik, sekolah" />
+  <meta name="author" content="SMK Muhammadiyah 04 Bangsri" />
+
+  <!-- Open Graph -->
+  <meta property="og:title" content="SIA SMK Muhammadiyah 04 Bangsri" />
+  <meta property="og:description" content="Portal Sistem Informasi Akademik SMK Muhammadiyah 04 Bangsri" />
+  <meta property="og:type" content="website" />
+
+  <!-- PWA Meta -->
+  <meta name="theme-color" content="#1E40AF" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <link rel="manifest" href="/manifest.json" />
+
+  <!-- Favicon -->
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+
+  <!-- Google Font: Inter -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet" />
+
+  <!-- Lucide Icons CDN -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="module" src="/src/main.jsx"></script>
+
+  <!-- Service Worker Registration -->
+  <script>
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('/sw.js')
+          .then(reg => console.log('[SW] Registered:', reg.scope))
+          .catch(err => console.log('[SW] Registration failed:', err));
+      });
+    }
+  </script>
+</body>
+</html>

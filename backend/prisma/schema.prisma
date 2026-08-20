@@ -1,0 +1,277 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// -------------------------------------------------------------
+// MASTER DATA
+// -------------------------------------------------------------
+
+model TahunAjar {
+  id        String   @id @default(uuid())
+  nama      String   // Contoh: "2024/2025"
+  semester  Int      // 1 (Ganjil), 2 (Genap)
+  isActive  Boolean  @default(false)
+  startDate DateTime @db.Date
+  endDate   DateTime @db.Date
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Root Relations (Semua transaksi terikat ke sini)
+  riwayatKelas  RiwayatKelas[]
+  jadwal        Jadwal[]
+  absensi       Absensi[]
+  absensiSholat AbsensiSholat[]
+  poinSikap     PoinSikap[]
+  pembayaran    Pembayaran[]
+  nilai         Nilai[]
+}
+
+model User {
+  id        String   @id @default(uuid())
+  username  String   @unique
+  password  String
+  name      String
+  role      String   // admin, guru, staff, wali_murid, kepsek
+  teacherId String?  // Optional
+  studentId String?  // Optional
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Guru {
+  id          String   @id @default(uuid())
+  nip         String?  @unique
+  name        String
+  subject     String?
+  phone       String?
+  role        String   @default("guru")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  // Relations
+  jadwal      Jadwal[]
+  kelasWali   Kelas[]       @relation("WaliKelas")
+  absensiGuru AbsensiGuru[]
+}
+
+model Siswa {
+  id           String   @id @default(uuid())
+  nis          String   @unique
+  nisn         String?  @unique
+  name         String
+  gender       String
+  phone_parent String?
+  alamat       String?
+  sekolah_asal String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  
+  // Relations
+  riwayatKelas   RiwayatKelas[]
+  absensi        Absensi[]
+  absensiSholat  AbsensiSholat[] @relation("AbsensiSholatSiswa")
+  poinSikap      PoinSikap[]     @relation("PoinSikapSiswa")
+  pembayaran     Pembayaran[]    @relation("PembayaranSiswa")
+  nilai          Nilai[]
+}
+
+model Kelas {
+  id            String   @id @default(uuid())
+  name          String   @unique // Contoh: "X TKJ 1"
+  grade         String   // X, XI, XII
+  major         String   // TKJ, RPL
+  totalStudents Int      @default(0)
+  teacherId     String?  // Wali Kelas
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  
+  // Relations
+  waliKelas     Guru?          @relation("WaliKelas", fields: [teacherId], references: [id])
+  riwayatKelas  RiwayatKelas[]
+}
+
+model MataPelajaran {
+  id       String   @id @default(uuid())
+  kode     String   @unique
+  nama     String
+  kelompok String?  // Normatif, Adaptif, Produktif
+  
+  // Relations
+  jadwal   Jadwal[]
+  nilai    Nilai[]
+}
+
+model KalenderAkademik {
+  id          String   @id @default(uuid())
+  tanggal     DateTime @db.Date
+  tipe        String   // libur, acara, ujian
+  judul       String
+  keterangan  String?
+  jamMulai    Int?
+  jamSelesai  Int?
+  isFullDay   Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model AturanPoin {
+  id        String   @id @default(uuid())
+  kategori  String   // positif, negatif
+  nama      String
+  poin      Int
+  deskripsi String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  poinSikap PoinSikap[]
+}
+
+// -------------------------------------------------------------
+// TRANSACTIONAL DATA (Tied to TahunAjar)
+// -------------------------------------------------------------
+
+model RiwayatKelas {
+  id          String   @id @default(uuid())
+  siswaId     String
+  kelasId     String
+  tahunAjarId String
+  createdAt   DateTime @default(now())
+
+  // Relations
+  siswa       Siswa     @relation(fields: [siswaId], references: [id])
+  kelas       Kelas     @relation(fields: [kelasId], references: [id])
+  tahunAjar   TahunAjar @relation(fields: [tahunAjarId], references: [id])
+
+  @@unique([siswaId, tahunAjarId]) // 1 Siswa hanya punya 1 kelas per tahun ajar
+}
+
+model Nilai {
+  id          String   @id @default(uuid())
+  siswaId     String
+  mapelId     String
+  tahunAjarId String
+  jenis       String   // Tugas 1, UTS, UAS, Praktikum
+  score       Int      @default(0)
+  maxScore    Int      @default(100)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  siswa       Siswa         @relation(fields: [siswaId], references: [id])
+  mapel       MataPelajaran @relation(fields: [mapelId], references: [id])
+  tahunAjar   TahunAjar     @relation(fields: [tahunAjarId], references: [id])
+}
+
+model Jadwal {
+  id          String   @id @default(uuid())
+  day         String
+  time        String
+  jamKe       Int?
+  subjectId   String
+  teacherId   String
+  className   String   // Nama kelas untuk display cepat
+  room        String?
+  tahunAjarId String?
+
+  subject     MataPelajaran @relation(fields: [subjectId], references: [id])
+  teacher     Guru          @relation(fields: [teacherId], references: [id])
+  tahunAjar   TahunAjar?    @relation(fields: [tahunAjarId], references: [id])
+}
+
+model Absensi {
+  id          String   @id @default(uuid())
+  studentId   String
+  tahunAjarId String?
+  date        DateTime @db.Date
+  statusPagi  String?
+  statusSore  String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  student     Siswa      @relation(fields: [studentId], references: [id])
+  tahunAjar   TahunAjar? @relation(fields: [tahunAjarId], references: [id])
+}
+
+model AbsensiSholat {
+  id          String   @id @default(uuid())
+  studentId   String
+  tahunAjarId String?
+  date        DateTime @db.Date
+  dzuhur      Boolean  @default(false)
+  ashar       Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  student     Siswa      @relation("AbsensiSholatSiswa", fields: [studentId], references: [id])
+  tahunAjar   TahunAjar? @relation(fields: [tahunAjarId], references: [id])
+}
+
+model PoinSikap {
+  id           String   @id @default(uuid())
+  siswaId      String
+  tahunAjarId  String?
+  tanggal      DateTime @db.Date
+  aturanPoinId String
+  poin         Int
+  keterangan   String?
+  pencatat     String?
+  createdAt    DateTime @default(now())
+
+  siswa        Siswa      @relation("PoinSikapSiswa", fields: [siswaId], references: [id])
+  aturanPoin   AturanPoin @relation(fields: [aturanPoinId], references: [id])
+  tahunAjar    TahunAjar? @relation(fields: [tahunAjarId], references: [id])
+}
+
+model Pembayaran {
+  id          String    @id @default(uuid())
+  studentId   String
+  tahunAjarId String?
+  type        String    // SPP, Seragam, dll
+  month       String    // Juli, Agustus, dll
+  amount      Int
+  paid        Int       @default(0)
+  status      String    // lunas, cicilan, belum
+  date        DateTime? @db.Date
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  student     Siswa      @relation("PembayaranSiswa", fields: [studentId], references: [id])
+  tahunAjar   TahunAjar? @relation(fields: [tahunAjarId], references: [id])
+}
+
+// -------------------------------------------------------------
+// OTHERS
+// -------------------------------------------------------------
+
+model AbsensiGuru {
+  id          String   @id @default(uuid())
+  guruId      String
+  tanggal     DateTime @db.Date
+  status      String   // hadir, izin, sakit, alpha
+  sumber      String   // gps, manual
+  jamMasuk    String?
+  jamPulang   String?
+  jarakMeter  Int?
+  keterangan  String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  guru        Guru     @relation(fields: [guruId], references: [id])
+}
+
+model LogAktivitas {
+  id        String   @id @default(uuid())
+  userId    String?
+  userName  String?
+  action    String
+  detail    String?
+  createdAt DateTime @default(now())
+}
