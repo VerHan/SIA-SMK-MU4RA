@@ -62,15 +62,17 @@ let teacherGPSAttendanceList = [
    AUTH
    ============================================================ */
 export async function loginUser(username, password) {
-  await simulateNetwork();
-  const user = MOCK_USERS.find(
-    u => u.username === username && u.password === password
-  );
-  if (user) {
-    const { password: _, ...safeUser } = user;
-    return { success: true, user: safeUser };
+  try {
+    const res = await fetch('/api/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password })
+    });
+    const data = await res.json();
+    return data;
+  } catch (err) {
+    return { success: false, error: err.message };
   }
-  return { success: false, error: 'Username atau password salah.' };
 }
 
 
@@ -387,44 +389,31 @@ export async function deleteTeacher(id) {
    ABSENSI GURU (GPS GEOFENCING — Legacy)
    ============================================================ */
 export async function getTeacherAttendance(dateFilter) {
-  await simulateNetwork();
-  if (dateFilter) {
-    return teacherGPSAttendanceList.filter(t => t.date === dateFilter);
+  try {
+    const url = dateFilter ? `/api/guru/absen?date=${dateFilter}` : '/api/guru/absen';
+    const res = await fetch(url);
+    const data = await res.json();
+    return data;
+  } catch (err) {
+    console.error(err);
+    return [];
   }
-  return [...teacherGPSAttendanceList];
 }
 
 export async function submitTeacherAttendance({ teacherName, type, distanceMeters, isWithinGeofence, coords }) {
-  await simulateNetwork();
-  const now = new Date();
-  const timeStr = now.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
-  const dateStr = now.toISOString().split('T')[0];
-
-  let record = teacherGPSAttendanceList.find(t => t.teacherName === teacherName && t.date === dateStr);
-
-  if (type === 'in') {
-    if (record) {
-      return { success: false, error: 'Anda sudah melakukan Absen Masuk hari ini.' };
+  try {
+    const res = await fetch('/api/guru/absen', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ teacherName, type, distanceMeters, isWithinGeofence, coords })
+    });
+    const data = await res.json();
+    if (!data.success) {
+      return { success: false, error: data.message };
     }
-    const newRecord = {
-      id: generateId(),
-      teacherName,
-      date: dateStr,
-      timeIn: timeStr,
-      timeOut: null,
-      distanceMeters,
-      isWithinGeofence,
-      coords,
-      status: isWithinGeofence ? 'Hadir Tepat Waktu' : 'Absen Luar Area (GPS)',
-    };
-    teacherGPSAttendanceList.unshift(newRecord);
-    return { success: true, message: `Absen Masuk Berhasil pada jam ${timeStr} (Jarak: ${distanceMeters}m)` };
-  } else {
-    if (!record) {
-      return { success: false, error: 'Anda belum melakukan Absen Masuk hari ini.' };
-    }
-    record.timeOut = timeStr;
-    return { success: true, message: `Absen Pulang Berhasil pada jam ${timeStr}` };
+    return { success: true, message: data.message };
+  } catch (err) {
+    return { success: false, error: err.message };
   }
 }
 

@@ -31,6 +31,15 @@ const MOCK_USERS = [
 ];
 
 async function main() {
+  console.log('Wiping existing data...');
+  await prisma.riwayatKelas.deleteMany();
+  await prisma.kelas.deleteMany();
+  await prisma.user.deleteMany();
+  await prisma.mataPelajaran.deleteMany();
+  await prisma.siswa.deleteMany();
+  await prisma.guru.deleteMany();
+  await prisma.tahunAjar.deleteMany();
+
   console.log('Seeding database...');
   
   // 1. Tahun Ajar
