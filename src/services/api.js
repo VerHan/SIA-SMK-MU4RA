@@ -419,7 +419,17 @@ export async function getTeacherAttendance(dateFilter) {
     /* Fallback ke mock */
     let data = [...teacherAttendanceList];
     if (dateFilter) data = data.filter(a => a.tanggal === dateFilter);
-    return data;
+    return data.map(a => ({
+      id: a.id,
+      teacherId: a.guruId,
+      teacherName: a.guruName,
+      date: a.tanggal,
+      status: a.status,
+      timeIn: a.jamMasuk,
+      timeOut: a.jamPulang,
+      source: a.sumber,
+      distanceMeters: a.jarakMeter
+    }));
   }
 }
 
@@ -441,7 +451,52 @@ export async function submitTeacherAttendance({ teacherName, type, distanceMeter
     throw new Error('Backend tidak tersedia');
   } catch (err) {
     console.warn('Fallback untuk submit absensi guru:', err.message);
-    return { success: false, error: 'Backend tidak tersedia. Data tidak tersimpan ke database.' };
+    
+    // Implementasi Mock
+    const today = new Date().toISOString().split('T')[0];
+    const currentTime = new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', hour12: false });
+    
+    const existingIndex = teacherAttendanceList.findIndex(a => a.guruName === teacherName && a.tanggal === today);
+    
+    if (type === 'in') {
+      if (existingIndex !== -1 && teacherAttendanceList[existingIndex].jamMasuk) {
+        return { success: false, error: 'Anda sudah absen masuk hari ini' };
+      }
+      
+      const newRecord = {
+        id: generateId(),
+        guruId: 'g_mock', // Mock ID
+        guruName: teacherName,
+        tanggal: today,
+        status: isWithinGeofence ? 'hadir' : 'luar_radius',
+        sumber: 'gps',
+        jamMasuk: currentTime,
+        jamPulang: null,
+        jarakMeter: distanceMeters,
+        keterangan: ''
+      };
+      
+      if (existingIndex !== -1) {
+        teacherAttendanceList[existingIndex] = newRecord;
+      } else {
+        teacherAttendanceList.unshift(newRecord);
+      }
+      
+      return { success: true, message: 'Berhasil Absen Masuk (Offline Mode)!' };
+      
+    } else if (type === 'out') {
+      if (existingIndex === -1 || !teacherAttendanceList[existingIndex].jamMasuk) {
+        return { success: false, error: 'Anda belum absen masuk' };
+      }
+      if (teacherAttendanceList[existingIndex].jamPulang) {
+        return { success: false, error: 'Anda sudah absen pulang hari ini' };
+      }
+      
+      teacherAttendanceList[existingIndex].jamPulang = currentTime;
+      return { success: true, message: 'Berhasil Absen Pulang (Offline Mode)!' };
+    }
+
+    return { success: false, error: 'Tipe absen tidak valid.' };
   }
 }
 
