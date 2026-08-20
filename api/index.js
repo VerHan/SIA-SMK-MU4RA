@@ -1,7 +1,8 @@
-const express = require('express');
-const cors = require('cors');
-const { PrismaClient } = require('@prisma/client');
-require('dotenv').config();
+import express from 'express';
+import cors from 'cors';
+import { PrismaClient } from '@prisma/client';
+import dotenv from 'dotenv';
+dotenv.config();
 
 const app = express();
 const prisma = new PrismaClient();
@@ -16,7 +17,7 @@ app.get('/', (req, res) => {
 });
 
 // Endpoint Anti-Sleep untuk Bot (cron-job.org)
-app.get('/ping', async (req, res) => {
+app.get('/api/ping', async (req, res) => {
   try {
     await prisma.$queryRaw`SELECT 1`;
     res.status(200).json({ message: 'Pong! Database is awake.' });
@@ -124,10 +125,5 @@ app.post('/api/guru/absen', async (req, res) => {
   }
 });
 
-if (require.main === module) {
-  app.listen(PORT, () => {
-    console.log(`Server is running on port ${PORT}`);
-  });
-}
-
-module.exports = app;
+// Since this file uses ES modules, we export the app as default
+export default app;
