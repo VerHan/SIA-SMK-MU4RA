@@ -68,10 +68,26 @@ export async function loginUser(username, password) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ username, password })
     });
-    const data = await res.json();
-    return data;
+    /* Pastikan response berisi JSON sebelum parsing */
+    const contentType = res.headers.get('content-type');
+    if (contentType && contentType.includes('application/json')) {
+      const data = await res.json();
+      return data;
+    }
+    /* Response bukan JSON — fallback ke mock */
+    throw new Error('Backend tidak tersedia');
   } catch (err) {
-    return { success: false, error: err.message };
+    /* Fallback: gunakan mock data jika backend mati */
+    console.warn('Backend tidak tersedia, menggunakan data mock untuk login.');
+    await simulateNetwork();
+    const user = MOCK_USERS.find(
+      u => u.username === username && u.password === password
+    );
+    if (user) {
+      const { password: _, ...safeUser } = user;
+      return { success: true, user: safeUser };
+    }
+    return { success: false, error: 'Username atau password salah.' };
   }
 }
 
