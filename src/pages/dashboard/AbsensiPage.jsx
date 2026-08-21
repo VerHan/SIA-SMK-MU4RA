@@ -1,8 +1,8 @@
 /* AbsensiPage — Monitoring Absensi Siswa (Piket & Mapel) */
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, Fragment } from 'react';
 import * as XLSX from 'xlsx';
-import { getAttendance, getSubjectAttendance, getClasses, getSubjects } from '../../services/api';
+import { getAttendance, getSubjectAttendance, getClasses, getSubjects, getStudents } from '../../services/api';
 import Card from '../../components/ui/Card';
 import Table from '../../components/ui/Table';
 import Badge from '../../components/ui/Badge';
@@ -10,7 +10,7 @@ import Button from '../../components/ui/Button';
 import LoadingSpinner from '../../components/ui/LoadingSpinner';
 
 export default function AbsensiPage() {
-  const [activeTab, setActiveTab] = useState('piket'); // 'piket' | 'mapel'
+  const [activeTab, setActiveTab] = useState('piket'); // 'piket' | 'mapel' | 'rekap'
 
   const [classes, setClasses] = useState([]);
   const [subjects, setSubjects] = useState([]);
@@ -26,6 +26,12 @@ export default function AbsensiPage() {
   const [attendanceMapel, setAttendanceMapel] = useState([]);
   const [selectedSubject, setSelectedSubject] = useState('');
   const [loadingMapel, setLoadingMapel] = useState(false);
+
+  // States for Rekap Bulanan
+  const [students, setStudents] = useState([]);
+  const [rekapMonth, setRekapMonth] = useState(new Date().toISOString().substring(0, 7)); // YYYY-MM
+  const [rekapData, setRekapData] = useState([]);
+  const [rekapLoading, setRekapLoading] = useState(false);
 
   useEffect(() => {
     Promise.all([getClasses(), getSubjects()]).then(([clsData, subData]) => {
@@ -57,6 +63,21 @@ export default function AbsensiPage() {
       });
     }
   }, [selectedClass, selectedDate, selectedSubject, activeTab]);
+
+  // Fetch Rekap
+  useEffect(() => {
+    if (selectedClass && activeTab === 'rekap') {
+      setRekapLoading(true);
+      Promise.all([
+        getStudents(selectedClass),
+        getAttendance(selectedClass, null, rekapMonth)
+      ]).then(([studentsData, attData]) => {
+        setStudents(studentsData);
+        setRekapData(attData);
+        setRekapLoading(false);
+      });
+    }
+  }, [selectedClass, rekapMonth, activeTab]);
 
   const statusBadge = (status) => {
     const map = {
@@ -120,8 +141,8 @@ export default function AbsensiPage() {
         'Status Sore': a.statusSore?.toUpperCase() || '-',
         'Keterangan': a.statusPagi === 'hadir' && a.statusSore === 'alpha' ? 'Terdeteksi Bolos' : '-'
       }));
-      fileName = `Rekap_Piket_${selectedClass}_${selectedDate}.xlsx`;
-    } else {
+      fileName = `Absen_Piket_${selectedClass}_${selectedDate}.xlsx`;
+    } else if (activeTab === 'mapel') {
       exportData = attendanceMapel.map((a, i) => ({
         'No': i + 1,
         'Nama Siswa': a.studentName,
@@ -131,7 +152,28 @@ export default function AbsensiPage() {
         'Jam Ke': a.jamKe,
         'Status': a.status?.toUpperCase() || '-'
       }));
-      fileName = `Rekap_Mapel_${selectedSubject}_${selectedClass}_${selectedDate}.xlsx`;
+      fileName = `Absen_Mapel_${selectedSubject}_${selectedClass}_${selectedDate}.xlsx`;
+    } else if (activeTab === 'rekap') {
+      // Create a wide excel format for Rekap Bulanan
+      const [yearStr, monthStr] = rekapMonth.split('-');
+      const daysCount = getDaysInMonth(parseInt(yearStr), parseInt(monthStr));
+      
+      exportData = students.map((s, i) => {
+        const row = {
+          'No': i + 1,
+          'Nama Siswa': s.name,
+          'Kelas': selectedClass,
+          'Bulan': rekapMonth
+        };
+        for (let day = 1; day <= daysCount; day++) {
+          const dateStr = `${rekapMonth}-${String(day).padStart(2, '0')}`;
+          const att = rekapData.find(a => a.studentId === s.id && a.date === dateStr);
+          row[`Tgl ${day} (Pagi)`] = att?.statusPagi?.toUpperCase() || '-';
+          row[`Tgl ${day} (Sore)`] = att?.statusSore?.toUpperCase() || '-';
+        }
+        return row;
+      });
+      fileName = `Rekap_Bulanan_${selectedClass}_${rekapMonth}.xlsx`;
     }
 
     if (exportData.length === 0) {
@@ -141,7 +183,7 @@ export default function AbsensiPage() {
 
     const ws = XLSX.utils.json_to_sheet(exportData);
     const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "Rekap Absensi");
+    XLSX.utils.book_append_sheet(wb, ws, "Data Absensi");
     XLSX.writeFile(wb, fileName);
   };
 
@@ -151,6 +193,84 @@ export default function AbsensiPage() {
     { key: 'jamKe', label: 'Jam Ke', width: '100px', cellStyle: { textAlign: 'center' } },
     { key: 'status', label: 'Status', width: '120px', render: (val) => statusBadge(val) },
   ];
+
+  // Helper untuk mendapatkan jumlah hari dalam bulan
+  const getDaysInMonth = (year, month) => new Date(year, month, 0).getDate();
+  
+  // Render Rekap Table
+  const renderRekapTable = () => {
+    if (rekapLoading) return <LoadingSpinner message="Memuat rekap..." />;
+    
+    const [yearStr, monthStr] = rekapMonth.split('-');
+    const daysCount = getDaysInMonth(parseInt(yearStr), parseInt(monthStr));
+    const daysArray = Array.from({ length: daysCount }, (_, i) => i + 1);
+
+    const getStatusInitial = (status) => {
+      if (!status) return '-';
+      return status.charAt(0).toUpperCase();
+    };
+    
+    const getStatusColor = (status) => {
+      if (status === 'hadir') return '#10B981';
+      if (status === 'izin') return '#3B82F6';
+      if (status === 'sakit') return '#F59E0B';
+      if (status === 'alpha') return '#EF4444';
+      return 'transparent';
+    };
+
+    return (
+      <div style={{ overflowX: 'auto', paddingBottom: 'var(--space-4)' }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: '1200px' }}>
+          <thead>
+            <tr>
+              <th rowSpan="2" style={{ padding: '12px', borderBottom: '1px solid var(--color-border)', borderRight: '1px solid var(--color-border)', background: 'var(--color-surface-alt)', textAlign: 'left', minWidth: '200px', position: 'sticky', left: 0, zIndex: 10 }}>Nama Siswa</th>
+              {daysArray.map(day => (
+                <th key={day} colSpan="2" style={{ padding: '8px', borderBottom: '1px solid var(--color-border)', borderRight: '1px solid var(--color-border)', background: 'var(--color-surface-alt)', textAlign: 'center', fontSize: '12px' }}>
+                  {day}
+                </th>
+              ))}
+            </tr>
+            <tr>
+              {daysArray.map(day => (
+                <Fragment key={`sub-${day}`}>
+                  <th style={{ padding: '6px', borderBottom: '1px solid var(--color-border)', borderRight: '1px solid var(--color-border)', background: 'var(--color-surface)', textAlign: 'center', fontSize: '10px', color: 'var(--color-text-secondary)' }}>P</th>
+                  <th style={{ padding: '6px', borderBottom: '1px solid var(--color-border)', borderRight: '1px solid var(--color-border)', background: 'var(--color-surface)', textAlign: 'center', fontSize: '10px', color: 'var(--color-text-secondary)' }}>S</th>
+                </Fragment>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {students.length === 0 ? (
+              <tr>
+                <td colSpan={1 + (daysCount * 2)} style={{ padding: '24px', textAlign: 'center', color: 'var(--color-text-muted)' }}>Tidak ada data siswa.</td>
+              </tr>
+            ) : (
+              students.map(s => (
+                <tr key={s.id}>
+                  <td style={{ padding: '10px 12px', borderBottom: '1px solid var(--color-border-light)', borderRight: '1px solid var(--color-border-light)', fontSize: '13px', fontWeight: '500', position: 'sticky', left: 0, background: 'var(--color-surface)', zIndex: 1 }}>{s.name}</td>
+                  {daysArray.map(day => {
+                    const dateStr = `${rekapMonth}-${String(day).padStart(2, '0')}`;
+                    const att = rekapData.find(a => a.studentId === s.id && a.date === dateStr);
+                    
+                    return (
+                      <Fragment key={`cell-${s.id}-${day}`}>
+                        <td style={{ padding: '4px', borderBottom: '1px solid var(--color-border-light)', borderRight: '1px dotted var(--color-border-light)', textAlign: 'center', fontSize: '11px', fontWeight: 'bold', color: getStatusColor(att?.statusPagi) }}>
+                          {getStatusInitial(att?.statusPagi)}
+                        </td>
+                        <td style={{ padding: '4px', borderBottom: '1px solid var(--color-border-light)', borderRight: '1px solid var(--color-border-light)', textAlign: 'center', fontSize: '11px', fontWeight: 'bold', color: getStatusColor(att?.statusSore) }}>
+                          {getStatusInitial(att?.statusSore)}
+                        </td>
+                      </Fragment>
+                    );
+                  })}
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
+      </div>
+    );
+  };
 
   return (
     <div style={{ animation: 'fadeIn 300ms ease' }}>
@@ -176,6 +296,9 @@ export default function AbsensiPage() {
         <button style={mainTabStyle(activeTab === 'mapel')} onClick={() => setActiveTab('mapel')}>
           Absen per Mata Pelajaran
         </button>
+        <button style={mainTabStyle(activeTab === 'rekap')} onClick={() => setActiveTab('rekap')}>
+          Rekap Piket Bulanan
+        </button>
       </div>
 
       {/* Filters Row */}
@@ -199,27 +322,46 @@ export default function AbsensiPage() {
           </select>
         </div>
         
-        <div>
-          <label style={{ display: 'block', fontSize: '11px', fontWeight: 'var(--font-weight-semibold)', marginBottom: '4px', color: 'var(--color-text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-            Tanggal
-          </label>
-          <input
-            type="date" value={selectedDate}
-            onChange={(e) => setSelectedDate(e.target.value)}
-            style={{
-              padding: '8px 14px', borderRadius: 'var(--radius-md)',
-              border: '1px solid var(--color-border)', fontSize: 'var(--font-size-sm)',
-              background: 'var(--color-surface)',
-            }}
-          />
-        </div>
+        {activeTab === 'rekap' ? (
+          <div>
+            <label style={{ display: 'block', fontSize: '11px', fontWeight: 'var(--font-weight-semibold)', marginBottom: '4px', color: 'var(--color-text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+              Bulan
+            </label>
+            <input
+              type="month" value={rekapMonth}
+              onChange={(e) => setRekapMonth(e.target.value)}
+              style={{
+                padding: '8px 14px', borderRadius: 'var(--radius-md)',
+                border: '1px solid var(--color-border)', fontSize: 'var(--font-size-sm)',
+                background: 'var(--color-surface)',
+              }}
+            />
+          </div>
+        ) : (
+          <div>
+            <label style={{ display: 'block', fontSize: '11px', fontWeight: 'var(--font-weight-semibold)', marginBottom: '4px', color: 'var(--color-text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+              Tanggal
+            </label>
+            <input
+              type="date" value={selectedDate}
+              onChange={(e) => setSelectedDate(e.target.value)}
+              style={{
+                padding: '8px 14px', borderRadius: 'var(--radius-md)',
+                border: '1px solid var(--color-border)', fontSize: 'var(--font-size-sm)',
+                background: 'var(--color-surface)',
+              }}
+            />
+          </div>
+        )}
 
-        {activeTab === 'piket' ? (
+        {activeTab === 'piket' && (
           <div style={{ display: 'flex', gap: '6px' }}>
             <button style={sesiTabStyle(sesi === 'pagi')} onClick={() => setSesi('pagi')}>Pagi</button>
             <button style={sesiTabStyle(sesi === 'sore')} onClick={() => setSesi('sore')}>Sore</button>
           </div>
-        ) : (
+        )}
+
+        {activeTab === 'mapel' && (
           <div>
             <label style={{ display: 'block', fontSize: '11px', fontWeight: 'var(--font-weight-semibold)', marginBottom: '4px', color: 'var(--color-text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
               Mata Pelajaran
@@ -270,7 +412,7 @@ export default function AbsensiPage() {
       )}
 
       {/* Table */}
-      <Card padding="0">
+      <Card padding={activeTab === 'rekap' ? "var(--space-4) 0 0 0" : "0"}>
         {activeTab === 'piket' ? (
           loadingPiket ? (
             <LoadingSpinner message="Memuat data absensi piket..." />
@@ -293,7 +435,7 @@ export default function AbsensiPage() {
               emptyMessage="Belum ada data absensi piket."
             />
           )
-        ) : (
+        ) : activeTab === 'mapel' ? (
           loadingMapel ? (
             <LoadingSpinner message="Memuat data absensi mapel..." />
           ) : (
@@ -303,6 +445,8 @@ export default function AbsensiPage() {
               emptyMessage="Belum ada data absensi untuk mata pelajaran ini." 
             />
           )
+        ) : (
+          renderRekapTable()
         )}
       </Card>
     </div>
