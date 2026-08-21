@@ -7,6 +7,7 @@ import Table from '../../components/ui/Table';
 import Button from '../../components/ui/Button';
 import LoadingSpinner from '../../components/ui/LoadingSpinner';
 import Toast from '../../components/ui/Toast';
+import StudentDetailModal from '../../components/ui/StudentDetailModal';
 
 export default function GuruAbsenPiketPage() {
   const [activeTab, setActiveTab] = useState('input'); // 'input' | 'rekap'
@@ -31,6 +32,15 @@ export default function GuruAbsenPiketPage() {
   const [rekapData, setRekapData] = useState([]);
   const [rekapLoading, setRekapLoading] = useState(false);
   const [availableMonths, setAvailableMonths] = useState([]);
+
+  // Modal States
+  const [selectedProfileId, setSelectedProfileId] = useState(null);
+  const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
+
+  const openStudentProfile = (studentId) => {
+    setSelectedProfileId(studentId);
+    setIsProfileModalOpen(true);
+  };
 
   useEffect(() => {
     Promise.all([getClasses(), getAcademicYears()]).then(([classesData, yearsData]) => {
@@ -170,8 +180,12 @@ export default function GuruAbsenPiketPage() {
   };
 
   const columnsInput = [
-    { key: 'no', label: 'No', width: '50px', render: (_, __, i) => i + 1 },
-    { key: 'name', label: 'Nama Siswa', cellStyle: { fontWeight: 'var(--font-weight-medium)' } },
+    { key: 'no', label: 'No', width: '50px', render: (_, row, i) => i + 1 },
+    { key: 'name', label: 'Nama Siswa', render: (_, row) => (
+      <button type="button" onClick={() => openStudentProfile(row.id)} style={{ color: 'var(--color-primary)', background: 'none', border: 'none', cursor: 'pointer', fontWeight: 'bold', padding: 0 }}>
+        {row.name}
+      </button>
+    ) },
     { key: 'nis', label: 'NIS / NISN', render: (val, row) => `${row.nis} / ${row.nisn}`, width: '150px' },
     {
       key: 'input',
@@ -248,7 +262,11 @@ export default function GuruAbsenPiketPage() {
                 
                 return (
                   <tr key={s.id}>
-                    <td style={{ padding: '10px 12px', borderBottom: '1px solid var(--color-border-light)', borderRight: '1px solid var(--color-border-light)', fontSize: '13px', fontWeight: '500', position: 'sticky', left: 0, background: 'var(--color-surface)', zIndex: 1 }}>{s.name}</td>
+                    <td style={{ padding: '10px 12px', borderBottom: '1px solid var(--color-border-light)', borderRight: '1px solid var(--color-border-light)', fontSize: '13px', fontWeight: '500', position: 'sticky', left: 0, background: 'var(--color-surface)', zIndex: 1 }}>
+                      <button type="button" onClick={() => openStudentProfile(s.id)} style={{ color: 'var(--color-primary)', background: 'none', border: 'none', cursor: 'pointer', fontWeight: 'bold', padding: 0, textAlign: 'left', width: '100%' }}>
+                        {s.name}
+                      </button>
+                    </td>
                     {daysArray.map(day => {
                       const dateStr = `${rekapMonth}-${String(day).padStart(2, '0')}`;
                       const att = rekapData.find(a => a.studentId === s.id && a.date === dateStr);
@@ -405,6 +423,12 @@ export default function GuruAbsenPiketPage() {
           renderRekapTable()
         )}
       </Card>
+
+      <StudentDetailModal 
+        isOpen={isProfileModalOpen} 
+        onClose={() => setIsProfileModalOpen(false)} 
+        studentId={selectedProfileId} 
+      />
     </div>
   );
 }

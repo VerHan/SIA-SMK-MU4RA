@@ -22,7 +22,8 @@ import {
   MOCK_BEHAVIOR_RULES,
   MOCK_BEHAVIOR_POINTS,
   MOCK_TIME_SLOTS,
-  MOCK_ACADEMIC_CALENDAR
+  MOCK_ACADEMIC_CALENDAR,
+  MOCK_STUDENT_ATTITUDE
 } from './mockData';
 import { delay, generateId } from '../utils/helpers';
 import { SUBJECT_GROUPS as DEFAULT_SUBJECT_GROUPS } from '../config/constants';
@@ -50,6 +51,7 @@ let attendanceList = [...MOCK_ATTENDANCE];
 let scheduleList = [...MOCK_SCHEDULE];
 let academicCalendarList = [...MOCK_ACADEMIC_CALENDAR];
 let timeSlotsList = [...MOCK_TIME_SLOTS];
+let studentAttitudeList = MOCK_STUDENT_ATTITUDE ? [...MOCK_STUDENT_ATTITUDE] : [];
 
 /* Legacy GPS teacher attendance (for AbsenGuruGPSPage) */
 let teacherGPSAttendanceList = [
@@ -891,4 +893,51 @@ export async function deleteAcademicCalendarEvent(id) {
   await simulateNetwork();
   academicCalendarList = academicCalendarList.filter(c => c.id !== id);
   return { success: true, message: 'Event berhasil dihapus.' };
+}
+
+/* ============================================================
+   PROFIL SISWA (RAPOR KARAKTER & KEHADIRAN)
+   ============================================================ */
+export async function getStudentProfile(studentId) {
+  await simulateNetwork();
+  
+  const student = studentsList.find(s => s.id === studentId);
+  if (!student) return null;
+
+  // 1. Kehadiran Piket
+  const piketRecords = attendanceList.filter(a => a.studentId === studentId);
+  let piketSummary = { hadir: 0, izin: 0, sakit: 0, alpha: 0, total: 0 };
+  piketRecords.forEach(att => {
+    ['statusPagi', 'statusSore'].forEach(sesi => {
+      if (att[sesi] === 'hadir') piketSummary.hadir++;
+      else if (att[sesi] === 'izin') piketSummary.izin++;
+      else if (att[sesi] === 'sakit') piketSummary.sakit++;
+      else if (att[sesi] === 'alpha') piketSummary.alpha++;
+    });
+  });
+  piketSummary.total = piketSummary.hadir + piketSummary.izin + piketSummary.sakit + piketSummary.alpha;
+
+  // 2. Kehadiran Mapel
+  const mapelRecords = subjectAttendanceList.filter(a => a.studentId === studentId);
+  const mapelSummary = {};
+  mapelRecords.forEach(att => {
+    if (!mapelSummary[att.subject]) {
+      mapelSummary[att.subject] = { hadir: 0, izin: 0, sakit: 0, alpha: 0, total: 0 };
+    }
+    if (att.status === 'hadir') mapelSummary[att.subject].hadir++;
+    else if (att.status === 'izin') mapelSummary[att.subject].izin++;
+    else if (att.status === 'sakit') mapelSummary[att.subject].sakit++;
+    else if (att.status === 'alpha') mapelSummary[att.subject].alpha++;
+    mapelSummary[att.subject].total++;
+  });
+
+  // 3. Jurnal Sikap
+  const attitudeRecords = studentAttitudeList.filter(a => a.studentId === studentId);
+  
+  return {
+    student,
+    piketSummary,
+    mapelSummary,
+    attitudeRecords
+  };
 }

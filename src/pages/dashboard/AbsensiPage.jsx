@@ -8,6 +8,7 @@ import Table from '../../components/ui/Table';
 import Badge from '../../components/ui/Badge';
 import Button from '../../components/ui/Button';
 import LoadingSpinner from '../../components/ui/LoadingSpinner';
+import StudentDetailModal from '../../components/ui/StudentDetailModal';
 
 export default function AbsensiPage() {
   const [activeTab, setActiveTab] = useState('piket'); // 'piket' | 'mapel'
@@ -34,6 +35,15 @@ export default function AbsensiPage() {
   const [rekapData, setRekapData] = useState([]);
   const [rekapLoading, setRekapLoading] = useState(false);
   const [availableMonths, setAvailableMonths] = useState([]);
+
+  // Modal States
+  const [selectedProfileId, setSelectedProfileId] = useState(null);
+  const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
+
+  const openStudentProfile = (studentId) => {
+    setSelectedProfileId(studentId);
+    setIsProfileModalOpen(true);
+  };
 
   useEffect(() => {
     Promise.all([getClasses(), getSubjects(), getAcademicYears()]).then(([clsData, subData, yearsData]) => {
@@ -225,7 +235,11 @@ export default function AbsensiPage() {
 
   const mapelColumns = [
     { key: 'no', label: 'No', width: '50px', render: (_, row, i) => i + 1 },
-    { key: 'studentName', label: 'Nama Siswa' },
+    { key: 'studentName', label: 'Nama Siswa', render: (_, row) => (
+      <button onClick={() => openStudentProfile(row.studentId)} style={{ color: 'var(--color-primary)', background: 'none', border: 'none', cursor: 'pointer', fontWeight: 'bold', padding: 0 }}>
+        {row.studentName}
+      </button>
+    ) },
     { key: 'jamKe', label: 'Jam Ke', width: '100px', cellStyle: { textAlign: 'center' } },
     { key: 'status', label: 'Status', width: '120px', render: (val) => statusBadge(val) },
   ];
@@ -283,7 +297,11 @@ export default function AbsensiPage() {
                 
                 return (
                   <tr key={s.id}>
-                    <td style={{ padding: '10px 12px', borderBottom: '1px solid var(--color-border-light)', borderRight: '1px solid var(--color-border-light)', fontSize: '13px', fontWeight: '500', position: 'sticky', left: 0, background: 'var(--color-surface)', zIndex: 1 }}>{s.name}</td>
+                    <td style={{ padding: '10px 12px', borderBottom: '1px solid var(--color-border-light)', borderRight: '1px solid var(--color-border-light)', fontSize: '13px', fontWeight: '500', position: 'sticky', left: 0, background: 'var(--color-surface)', zIndex: 1 }}>
+                      <button onClick={() => openStudentProfile(s.id)} style={{ color: 'var(--color-primary)', background: 'none', border: 'none', cursor: 'pointer', fontWeight: 'bold', padding: 0, textAlign: 'left', width: '100%' }}>
+                        {s.name}
+                      </button>
+                    </td>
                     {daysArray.map(day => {
                       const dateStr = `${rekapMonth}-${String(day).padStart(2, '0')}`;
                       const att = rekapData.find(a => a.studentId === s.id && a.date === dateStr);
@@ -515,7 +533,11 @@ export default function AbsensiPage() {
               <Table
                 columns={[
                   { key: 'no', label: 'No', width: '50px', render: (_, row, i) => i + 1 },
-                  { key: 'studentName', label: 'Nama Siswa' },
+                  { key: 'studentName', label: 'Nama Siswa', render: (_, row) => (
+                    <button onClick={() => openStudentProfile(row.studentId)} style={{ color: 'var(--color-primary)', background: 'none', border: 'none', cursor: 'pointer', fontWeight: 'bold', padding: 0 }}>
+                      {row.studentName}
+                    </button>
+                  ) },
                   { key: 'statusPagi', label: 'Pagi', width: '90px', render: (val) => statusBadge(val) },
                   { key: 'statusSore', label: 'Sore', width: '90px', render: (val) => statusBadge(val) },
                   { key: 'warning', label: '', width: '40px',
@@ -545,6 +567,12 @@ export default function AbsensiPage() {
           )
         )}
       </Card>
+
+      <StudentDetailModal 
+        isOpen={isProfileModalOpen} 
+        onClose={() => setIsProfileModalOpen(false)} 
+        studentId={selectedProfileId} 
+      />
     </div>
   );
 }

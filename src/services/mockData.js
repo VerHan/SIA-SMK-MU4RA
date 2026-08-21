@@ -273,3 +273,10 @@ export const MOCK_USERS = [
   { id: 'u005', username: 'kepsek', password: 'kepsek123', name: 'Drs. H. Suharto, M.Pd.', role: 'kepsek', avatar: null },
 ];
 
+/* --- Data Jurnal Sikap & Pelanggaran --- */
+export const MOCK_STUDENT_ATTITUDE = [
+  { id: 'att001', studentId: 's001', date: '2024-08-10', type: 'positif', note: 'Membantu merapikan lab komputer setelah praktik', teacherName: 'Budi Santoso, S.T.' },
+  { id: 'att002', studentId: 's001', date: '2024-08-15', type: 'negatif', note: 'Terlambat masuk kelas setelah istirahat', teacherName: 'Ahmad Fauzi, S.Pd.' },
+  { id: 'att003', studentId: 's002', date: '2024-08-12', type: 'positif', note: 'Aktif berdiskusi di kelas PAI', teacherName: 'Eko Prasetyo, S.Pd.I.' },
+  { id: 'att004', studentId: 's003', date: '2024-08-14', type: 'negatif', note: 'Mengobrol saat guru menerangkan', teacherName: 'Siti Nurhaliza, S.Kom.' },
+];
