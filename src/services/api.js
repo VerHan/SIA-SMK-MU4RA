@@ -665,10 +665,12 @@ export async function saveAttendance(records) {
   return { success: true, message: 'Absensi berhasil disimpan.' };
 }
 
-export async function getSubjectAttendance(classFilter) {
+export async function getSubjectAttendance(classFilter, dateFilter, subjectFilter) {
   await simulateNetwork();
   let data = [...subjectAttendanceList];
   if (classFilter) data = data.filter(a => a.class === classFilter);
+  if (dateFilter) data = data.filter(a => a.date === dateFilter);
+  if (subjectFilter) data = data.filter(a => a.subject === subjectFilter);
   return data;
 }
 

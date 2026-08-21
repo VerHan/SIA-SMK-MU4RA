@@ -54,7 +54,7 @@ const DataSiswaPage = safeLazy(() => import('./pages/dashboard/DataSiswaPage'));
 const JadwalPage = safeLazy(() => import('./pages/dashboard/JadwalPage'));
 const WaliKelasPage = safeLazy(() => import('./pages/dashboard/WaliKelasPage'));
 const AbsensiPage = safeLazy(() => import('./pages/dashboard/AbsensiPage'));
-const AbsenMapelPage = safeLazy(() => import('./pages/dashboard/AbsenMapelPage'));
+
 const MonitoringMapelPage = safeLazy(() => import('./pages/dashboard/MonitoringMapelPage'));
 const AbsenSholatPage = safeLazy(() => import('./pages/dashboard/AbsenSholatPage'));
 const PembayaranPage = safeLazy(() => import('./pages/dashboard/PembayaranPage'));
@@ -178,7 +178,7 @@ export default function App() {
                   <Route path="/dashboard/pengaturan" element={<PengaturanPage />} />
                   
                   {/* Legacy routes (hidden from menu, still accessible) */}
-                  <Route path="/dashboard/absen-mapel" element={<AbsenMapelPage />} />
+
                   <Route path="/dashboard/absen-sholat" element={<AbsenSholatPage />} />
                   <Route path="/dashboard/pembayaran" element={<PembayaranPage />} />
                 </Route>

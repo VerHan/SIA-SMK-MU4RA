@@ -1,39 +1,62 @@
-/* AbsensiPage — Absensi harian siswa (Pagi & Sore) */
+/* AbsensiPage — Monitoring Absensi Siswa (Piket & Mapel) */
 
 import { useState, useEffect } from 'react';
 import * as XLSX from 'xlsx';
-import { getAttendance, getClasses, getStudents, saveAttendance } from '../../services/api';
+import { getAttendance, getSubjectAttendance, getClasses, getSubjects } from '../../services/api';
 import Card from '../../components/ui/Card';
 import Table from '../../components/ui/Table';
 import Badge from '../../components/ui/Badge';
 import Button from '../../components/ui/Button';
+import LoadingSpinner from '../../components/ui/LoadingSpinner';
 
 export default function AbsensiPage() {
-  const [attendance, setAttendance] = useState([]);
+  const [activeTab, setActiveTab] = useState('piket'); // 'piket' | 'mapel'
+
   const [classes, setClasses] = useState([]);
+  const [subjects, setSubjects] = useState([]);
   const [selectedClass, setSelectedClass] = useState('');
-  const [selectedDate, setSelectedDate] = useState('2024-07-22');
-  const [loading, setLoading] = useState(true);
+  
+  // States for Piket
+  const [attendancePiket, setAttendancePiket] = useState([]);
+  const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
   const [sesi, setSesi] = useState('pagi'); /* 'pagi' | 'sore' */
+  const [loadingPiket, setLoadingPiket] = useState(true);
+
+  // States for Mapel
+  const [attendanceMapel, setAttendanceMapel] = useState([]);
+  const [selectedSubject, setSelectedSubject] = useState('');
+  const [loadingMapel, setLoadingMapel] = useState(false);
 
   useEffect(() => {
-    getClasses().then(data => {
-      setClasses(data);
-      if (data.length > 0) setSelectedClass(data[0].name);
+    Promise.all([getClasses(), getSubjects()]).then(([clsData, subData]) => {
+      setClasses(clsData);
+      setSubjects(subData);
+      if (clsData.length > 0) setSelectedClass(clsData[0].name);
+      if (subData.length > 0) setSelectedSubject(subData[0].name);
     });
   }, []);
 
-  const fetchData = () => {
-    if (selectedClass) {
-      setLoading(true);
+  // Fetch Piket
+  useEffect(() => {
+    if (selectedClass && activeTab === 'piket') {
+      setLoadingPiket(true);
       getAttendance(selectedClass, selectedDate).then(data => {
-        setAttendance(data);
-        setLoading(false);
+        setAttendancePiket(data);
+        setLoadingPiket(false);
       });
     }
-  };
+  }, [selectedClass, selectedDate, activeTab]);
 
-  useEffect(() => { fetchData(); }, [selectedClass, selectedDate]);
+  // Fetch Mapel
+  useEffect(() => {
+    if (selectedClass && selectedSubject && activeTab === 'mapel') {
+      setLoadingMapel(true);
+      getSubjectAttendance(selectedClass, selectedDate, selectedSubject).then(data => {
+        setAttendanceMapel(data);
+        setLoadingMapel(false);
+      });
+    }
+  }, [selectedClass, selectedDate, selectedSubject, activeTab]);
 
   const statusBadge = (status) => {
     const map = {
@@ -46,19 +69,30 @@ export default function AbsensiPage() {
     return <Badge variant={s.variant}>{s.label}</Badge>;
   };
 
-  /* Count summary */
+  /* Count summary for Piket */
   const pagiField = 'statusPagi';
   const soreField = 'statusSore';
   const currentField = sesi === 'pagi' ? pagiField : soreField;
-  const counts = {
-    hadir: attendance.filter(a => a[currentField] === 'hadir').length,
-    izin: attendance.filter(a => a[currentField] === 'izin').length,
-    sakit: attendance.filter(a => a[currentField] === 'sakit').length,
-    alpha: attendance.filter(a => a[currentField] === 'alpha').length,
+  const countsPiket = {
+    hadir: attendancePiket.filter(a => a[currentField] === 'hadir').length,
+    izin: attendancePiket.filter(a => a[currentField] === 'izin').length,
+    sakit: attendancePiket.filter(a => a[currentField] === 'sakit').length,
+    alpha: attendancePiket.filter(a => a[currentField] === 'alpha').length,
   };
 
-  /* Detect bolos: hadir pagi tapi alpha sore */
-  const bolosCount = attendance.filter(a => a.statusPagi === 'hadir' && a.statusSore === 'alpha').length;
+  /* Detect bolos for Piket */
+  const bolosCount = attendancePiket.filter(a => a.statusPagi === 'hadir' && a.statusSore === 'alpha').length;
+
+  const mainTabStyle = (active) => ({
+    padding: '10px 24px',
+    fontSize: 'var(--font-size-sm)',
+    fontWeight: 'var(--font-weight-bold)',
+    color: active ? '#1E40AF' : 'var(--color-text-secondary)',
+    borderBottom: active ? '3px solid #3B82F6' : '3px solid transparent',
+    background: 'transparent',
+    cursor: 'pointer',
+    transition: 'all var(--transition-fast)',
+  });
 
   const sesiTabStyle = (active) => ({
     padding: '8px 20px',
@@ -73,15 +107,32 @@ export default function AbsensiPage() {
   });
 
   const handleExport = () => {
-    let exportData = attendance.map((a, i) => ({
-      'No': i + 1,
-      'Nama Siswa': a.studentName,
-      'Kelas': a.class,
-      'Tanggal': a.date,
-      'Status Pagi': a.statusPagi.toUpperCase(),
-      'Status Sore': a.statusSore.toUpperCase(),
-      'Keterangan': a.statusPagi === 'hadir' && a.statusSore === 'alpha' ? 'Terdeteksi Bolos' : '-'
-    }));
+    let exportData = [];
+    let fileName = '';
+
+    if (activeTab === 'piket') {
+      exportData = attendancePiket.map((a, i) => ({
+        'No': i + 1,
+        'Nama Siswa': a.studentName,
+        'Kelas': a.class,
+        'Tanggal': a.date,
+        'Status Pagi': a.statusPagi?.toUpperCase() || '-',
+        'Status Sore': a.statusSore?.toUpperCase() || '-',
+        'Keterangan': a.statusPagi === 'hadir' && a.statusSore === 'alpha' ? 'Terdeteksi Bolos' : '-'
+      }));
+      fileName = `Rekap_Piket_${selectedClass}_${selectedDate}.xlsx`;
+    } else {
+      exportData = attendanceMapel.map((a, i) => ({
+        'No': i + 1,
+        'Nama Siswa': a.studentName,
+        'Kelas': a.class,
+        'Mata Pelajaran': a.subject,
+        'Tanggal': a.date,
+        'Jam Ke': a.jamKe,
+        'Status': a.status?.toUpperCase() || '-'
+      }));
+      fileName = `Rekap_Mapel_${selectedSubject}_${selectedClass}_${selectedDate}.xlsx`;
+    }
 
     if (exportData.length === 0) {
       alert('Tidak ada data absensi untuk diekspor pada filter ini.');
@@ -91,23 +142,40 @@ export default function AbsensiPage() {
     const ws = XLSX.utils.json_to_sheet(exportData);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Rekap Absensi");
-    XLSX.writeFile(wb, `Rekap_Absensi_${selectedClass}_${selectedDate}.xlsx`);
+    XLSX.writeFile(wb, fileName);
   };
+
+  const mapelColumns = [
+    { key: 'no', label: 'No', width: '50px', render: (_, row, i) => i + 1 },
+    { key: 'studentName', label: 'Nama Siswa' },
+    { key: 'jamKe', label: 'Jam Ke', width: '100px', cellStyle: { textAlign: 'center' } },
+    { key: 'status', label: 'Status', width: '120px', render: (val) => statusBadge(val) },
+  ];
 
   return (
     <div style={{ animation: 'fadeIn 300ms ease' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 'var(--space-6)', flexWrap: 'wrap', gap: 'var(--space-3)' }}>
         <div>
           <h1 style={{ fontSize: 'var(--font-size-2xl)', fontWeight: 'var(--font-weight-extrabold)', marginBottom: '4px' }}>
-            Absensi Siswa
+            Monitoring Absensi Siswa
           </h1>
           <p style={{ color: 'var(--color-text-secondary)', fontSize: 'var(--font-size-sm)' }}>
-            Absensi harian pagi & sore per kelas
+            Pantau kehadiran harian dan per mata pelajaran
           </p>
         </div>
         <Button variant="outline" onClick={handleExport} size="sm">
           ⬆️ Export Excel
         </Button>
+      </div>
+
+      {/* Main Tabs */}
+      <div style={{ marginBottom: 'var(--space-6)', display: 'flex', gap: 'var(--space-4)', borderBottom: '1px solid var(--color-border-light)' }}>
+        <button style={mainTabStyle(activeTab === 'piket')} onClick={() => setActiveTab('piket')}>
+          Absen Piket (Harian)
+        </button>
+        <button style={mainTabStyle(activeTab === 'mapel')} onClick={() => setActiveTab('mapel')}>
+          Absen per Mata Pelajaran
+        </button>
       </div>
 
       {/* Filters Row */}
@@ -130,6 +198,7 @@ export default function AbsensiPage() {
             {classes.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
           </select>
         </div>
+        
         <div>
           <label style={{ display: 'block', fontSize: '11px', fontWeight: 'var(--font-weight-semibold)', marginBottom: '4px', color: 'var(--color-text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
             Tanggal
@@ -144,60 +213,96 @@ export default function AbsensiPage() {
             }}
           />
         </div>
-        <div style={{ display: 'flex', gap: '6px' }}>
-          <button style={sesiTabStyle(sesi === 'pagi')} onClick={() => setSesi('pagi')}>Pagi</button>
-          <button style={sesiTabStyle(sesi === 'sore')} onClick={() => setSesi('sore')}>Sore</button>
-        </div>
-      </div>
 
-      {/* Summary */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(100px, 1fr))', gap: 'var(--space-2)', marginBottom: 'var(--space-4)' }}>
-        {[
-          { label: 'Hadir', value: counts.hadir, color: '#059669', bg: '#ECFDF5' },
-          { label: 'Izin', value: counts.izin, color: '#2563EB', bg: '#EFF6FF' },
-          { label: 'Sakit', value: counts.sakit, color: '#D97706', bg: '#FFFBEB' },
-          { label: 'Alpha', value: counts.alpha, color: '#DC2626', bg: '#FEF2F2' },
-        ].map((item, i) => (
-          <div key={i} style={{ padding: '12px', textAlign: 'center', background: item.bg, borderRadius: 'var(--radius-lg)' }}>
-            <div style={{ fontSize: 'var(--font-size-xl)', fontWeight: 'var(--font-weight-extrabold)', color: item.color }}>{item.value}</div>
-            <div style={{ fontSize: '10px', color: item.color, fontWeight: 'var(--font-weight-medium)', marginTop: '2px' }}>{item.label}</div>
+        {activeTab === 'piket' ? (
+          <div style={{ display: 'flex', gap: '6px' }}>
+            <button style={sesiTabStyle(sesi === 'pagi')} onClick={() => setSesi('pagi')}>Pagi</button>
+            <button style={sesiTabStyle(sesi === 'sore')} onClick={() => setSesi('sore')}>Sore</button>
           </div>
-        ))}
+        ) : (
+          <div>
+            <label style={{ display: 'block', fontSize: '11px', fontWeight: 'var(--font-weight-semibold)', marginBottom: '4px', color: 'var(--color-text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+              Mata Pelajaran
+            </label>
+            <select
+              value={selectedSubject}
+              onChange={(e) => setSelectedSubject(e.target.value)}
+              style={{
+                padding: '8px 14px', borderRadius: 'var(--radius-md)',
+                border: '1px solid var(--color-border)', fontSize: 'var(--font-size-sm)',
+                background: 'var(--color-surface)', minWidth: '200px',
+              }}
+            >
+              {subjects.map(s => <option key={s.id} value={s.name}>{s.name}</option>)}
+            </select>
+          </div>
+        )}
       </div>
 
-      {/* Bolos Warning */}
-      {bolosCount > 0 && (
-        <div style={{
-          padding: '10px 14px', background: '#FEF2F2', border: '1px solid #FECACA',
-          borderRadius: 'var(--radius-md)', fontSize: 'var(--font-size-sm)', color: '#991B1B',
-          fontWeight: 'var(--font-weight-medium)', marginBottom: 'var(--space-4)',
-        }}>
-          ⚠️ <strong>{bolosCount} siswa</strong> terdeteksi bolos — hadir pagi tapi alpha di sore hari
-        </div>
+      {activeTab === 'piket' && (
+        <>
+          {/* Summary Piket */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(100px, 1fr))', gap: 'var(--space-2)', marginBottom: 'var(--space-4)' }}>
+            {[
+              { label: 'Hadir', value: countsPiket.hadir, color: '#059669', bg: '#ECFDF5' },
+              { label: 'Izin', value: countsPiket.izin, color: '#2563EB', bg: '#EFF6FF' },
+              { label: 'Sakit', value: countsPiket.sakit, color: '#D97706', bg: '#FFFBEB' },
+              { label: 'Alpha', value: countsPiket.alpha, color: '#DC2626', bg: '#FEF2F2' },
+            ].map((item, i) => (
+              <div key={i} style={{ padding: '12px', textAlign: 'center', background: item.bg, borderRadius: 'var(--radius-lg)' }}>
+                <div style={{ fontSize: 'var(--font-size-xl)', fontWeight: 'var(--font-weight-extrabold)', color: item.color }}>{item.value}</div>
+                <div style={{ fontSize: '10px', color: item.color, fontWeight: 'var(--font-weight-medium)', marginTop: '2px' }}>{item.label}</div>
+              </div>
+            ))}
+          </div>
+
+          {/* Bolos Warning */}
+          {bolosCount > 0 && (
+            <div style={{
+              padding: '10px 14px', background: '#FEF2F2', border: '1px solid #FECACA',
+              borderRadius: 'var(--radius-md)', fontSize: 'var(--font-size-sm)', color: '#991B1B',
+              fontWeight: 'var(--font-weight-medium)', marginBottom: 'var(--space-4)',
+            }}>
+              ⚠️ <strong>{bolosCount} siswa</strong> terdeteksi bolos — hadir pagi tapi alpha di sore hari
+            </div>
+          )}
+        </>
       )}
 
       {/* Table */}
       <Card padding="0">
-        {loading ? (
-          <p style={{ textAlign: 'center', color: 'var(--color-text-muted)', padding: 'var(--space-8)' }}>Memuat data absensi...</p>
+        {activeTab === 'piket' ? (
+          loadingPiket ? (
+            <LoadingSpinner message="Memuat data absensi piket..." />
+          ) : (
+            <Table
+              columns={[
+                { key: 'no', label: 'No', width: '50px', render: (_, row, i) => i + 1 },
+                { key: 'studentName', label: 'Nama Siswa' },
+                { key: 'statusPagi', label: 'Pagi', width: '90px', render: (val) => statusBadge(val) },
+                { key: 'statusSore', label: 'Sore', width: '90px', render: (val) => statusBadge(val) },
+                { key: 'warning', label: '', width: '40px',
+                  render: (_, row) => (
+                    row.statusPagi === 'hadir' && row.statusSore === 'alpha'
+                      ? <span title="Terdeteksi bolos" style={{ fontSize: '16px' }}>⚠️</span>
+                      : null
+                  )
+                },
+              ]}
+              data={attendancePiket}
+              emptyMessage="Belum ada data absensi piket."
+            />
+          )
         ) : (
-          <Table
-            columns={[
-              { key: 'no', label: 'No', width: '50px', render: (_, row, i) => i + 1 },
-              { key: 'studentName', label: 'Nama Siswa' },
-              { key: 'statusPagi', label: 'Pagi', width: '90px', render: (val) => statusBadge(val) },
-              { key: 'statusSore', label: 'Sore', width: '90px', render: (val) => statusBadge(val) },
-              { key: 'warning', label: '', width: '40px',
-                render: (_, row) => (
-                  row.statusPagi === 'hadir' && row.statusSore === 'alpha'
-                    ? <span title="Terdeteksi bolos" style={{ fontSize: '16px' }}>⚠️</span>
-                    : null
-                )
-              },
-            ]}
-            data={attendance}
-            emptyMessage="Belum ada data absensi."
-          />
+          loadingMapel ? (
+            <LoadingSpinner message="Memuat data absensi mapel..." />
+          ) : (
+            <Table 
+              columns={mapelColumns} 
+              data={attendanceMapel} 
+              emptyMessage="Belum ada data absensi untuk mata pelajaran ini." 
+            />
+          )
         )}
       </Card>
     </div>
