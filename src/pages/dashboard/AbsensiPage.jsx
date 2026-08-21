@@ -10,24 +10,25 @@ import Button from '../../components/ui/Button';
 import LoadingSpinner from '../../components/ui/LoadingSpinner';
 
 export default function AbsensiPage() {
-  const [activeTab, setActiveTab] = useState('piket'); // 'piket' | 'mapel' | 'rekap'
+  const [activeTab, setActiveTab] = useState('piket'); // 'piket' | 'mapel'
 
   const [classes, setClasses] = useState([]);
   const [subjects, setSubjects] = useState([]);
   const [selectedClass, setSelectedClass] = useState('');
   
-  // States for Piket
+  // Piket States
+  const [viewMode, setViewMode] = useState('daily'); // 'daily' | 'monthly'
   const [attendancePiket, setAttendancePiket] = useState([]);
   const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
   const [sesi, setSesi] = useState('pagi'); /* 'pagi' | 'sore' */
   const [loadingPiket, setLoadingPiket] = useState(true);
 
-  // States for Mapel
+  // Mapel States
   const [attendanceMapel, setAttendanceMapel] = useState([]);
   const [selectedSubject, setSelectedSubject] = useState('');
   const [loadingMapel, setLoadingMapel] = useState(false);
 
-  // States for Rekap Bulanan
+  // Rekap Bulanan States
   const [students, setStudents] = useState([]);
   const [rekapMonth, setRekapMonth] = useState(new Date().toISOString().substring(0, 7)); // YYYY-MM
   const [rekapData, setRekapData] = useState([]);
@@ -42,16 +43,16 @@ export default function AbsensiPage() {
     });
   }, []);
 
-  // Fetch Piket
+  // Fetch Piket Daily
   useEffect(() => {
-    if (selectedClass && activeTab === 'piket') {
+    if (selectedClass && activeTab === 'piket' && viewMode === 'daily') {
       setLoadingPiket(true);
       getAttendance(selectedClass, selectedDate).then(data => {
         setAttendancePiket(data);
         setLoadingPiket(false);
       });
     }
-  }, [selectedClass, selectedDate, activeTab]);
+  }, [selectedClass, selectedDate, activeTab, viewMode]);
 
   // Fetch Mapel
   useEffect(() => {
@@ -64,9 +65,9 @@ export default function AbsensiPage() {
     }
   }, [selectedClass, selectedDate, selectedSubject, activeTab]);
 
-  // Fetch Rekap
+  // Fetch Rekap (Monthly)
   useEffect(() => {
-    if (selectedClass && activeTab === 'rekap') {
+    if (selectedClass && activeTab === 'piket' && viewMode === 'monthly') {
       setRekapLoading(true);
       Promise.all([
         getStudents(selectedClass),
@@ -77,7 +78,7 @@ export default function AbsensiPage() {
         setRekapLoading(false);
       });
     }
-  }, [selectedClass, rekapMonth, activeTab]);
+  }, [selectedClass, rekapMonth, activeTab, viewMode]);
 
   const statusBadge = (status) => {
     const map = {
@@ -90,7 +91,7 @@ export default function AbsensiPage() {
     return <Badge variant={s.variant}>{s.label}</Badge>;
   };
 
-  /* Count summary for Piket */
+  /* Count summary for Piket Daily */
   const pagiField = 'statusPagi';
   const soreField = 'statusSore';
   const currentField = sesi === 'pagi' ? pagiField : soreField;
@@ -101,7 +102,7 @@ export default function AbsensiPage() {
     alpha: attendancePiket.filter(a => a[currentField] === 'alpha').length,
   };
 
-  /* Detect bolos for Piket */
+  /* Detect bolos for Piket Daily */
   const bolosCount = attendancePiket.filter(a => a.statusPagi === 'hadir' && a.statusSore === 'alpha').length;
 
   const mainTabStyle = (active) => ({
@@ -132,16 +133,38 @@ export default function AbsensiPage() {
     let fileName = '';
 
     if (activeTab === 'piket') {
-      exportData = attendancePiket.map((a, i) => ({
-        'No': i + 1,
-        'Nama Siswa': a.studentName,
-        'Kelas': a.class,
-        'Tanggal': a.date,
-        'Status Pagi': a.statusPagi?.toUpperCase() || '-',
-        'Status Sore': a.statusSore?.toUpperCase() || '-',
-        'Keterangan': a.statusPagi === 'hadir' && a.statusSore === 'alpha' ? 'Terdeteksi Bolos' : '-'
-      }));
-      fileName = `Absen_Piket_${selectedClass}_${selectedDate}.xlsx`;
+      if (viewMode === 'daily') {
+        exportData = attendancePiket.map((a, i) => ({
+          'No': i + 1,
+          'Nama Siswa': a.studentName,
+          'Kelas': a.class,
+          'Tanggal': a.date,
+          'Status Pagi': a.statusPagi?.toUpperCase() || '-',
+          'Status Sore': a.statusSore?.toUpperCase() || '-',
+          'Keterangan': a.statusPagi === 'hadir' && a.statusSore === 'alpha' ? 'Terdeteksi Bolos' : '-'
+        }));
+        fileName = `Absen_Piket_${selectedClass}_${selectedDate}.xlsx`;
+      } else {
+        const [yearStr, monthStr] = rekapMonth.split('-');
+        const daysCount = getDaysInMonth(parseInt(yearStr), parseInt(monthStr));
+        
+        exportData = students.map((s, i) => {
+          const row = {
+            'No': i + 1,
+            'Nama Siswa': s.name,
+            'Kelas': selectedClass,
+            'Bulan': rekapMonth
+          };
+          for (let day = 1; day <= daysCount; day++) {
+            const dateStr = `${rekapMonth}-${String(day).padStart(2, '0')}`;
+            const att = rekapData.find(a => a.studentId === s.id && a.date === dateStr);
+            row[`Tgl ${day} (Pagi)`] = att?.statusPagi?.toUpperCase() || '-';
+            row[`Tgl ${day} (Sore)`] = att?.statusSore?.toUpperCase() || '-';
+          }
+          return row;
+        });
+        fileName = `Rekap_Bulanan_${selectedClass}_${rekapMonth}.xlsx`;
+      }
     } else if (activeTab === 'mapel') {
       exportData = attendanceMapel.map((a, i) => ({
         'No': i + 1,
@@ -153,27 +176,6 @@ export default function AbsensiPage() {
         'Status': a.status?.toUpperCase() || '-'
       }));
       fileName = `Absen_Mapel_${selectedSubject}_${selectedClass}_${selectedDate}.xlsx`;
-    } else if (activeTab === 'rekap') {
-      // Create a wide excel format for Rekap Bulanan
-      const [yearStr, monthStr] = rekapMonth.split('-');
-      const daysCount = getDaysInMonth(parseInt(yearStr), parseInt(monthStr));
-      
-      exportData = students.map((s, i) => {
-        const row = {
-          'No': i + 1,
-          'Nama Siswa': s.name,
-          'Kelas': selectedClass,
-          'Bulan': rekapMonth
-        };
-        for (let day = 1; day <= daysCount; day++) {
-          const dateStr = `${rekapMonth}-${String(day).padStart(2, '0')}`;
-          const att = rekapData.find(a => a.studentId === s.id && a.date === dateStr);
-          row[`Tgl ${day} (Pagi)`] = att?.statusPagi?.toUpperCase() || '-';
-          row[`Tgl ${day} (Sore)`] = att?.statusSore?.toUpperCase() || '-';
-        }
-        return row;
-      });
-      fileName = `Rekap_Bulanan_${selectedClass}_${rekapMonth}.xlsx`;
     }
 
     if (exportData.length === 0) {
@@ -290,100 +292,129 @@ export default function AbsensiPage() {
 
       {/* Main Tabs */}
       <div style={{ marginBottom: 'var(--space-6)', display: 'flex', gap: 'var(--space-4)', borderBottom: '1px solid var(--color-border-light)' }}>
-        <button style={mainTabStyle(activeTab === 'piket')} onClick={() => setActiveTab('piket')}>
-          Absen Piket (Harian)
+        <button style={mainTabStyle(activeTab === 'piket')} onClick={() => {
+          setActiveTab('piket');
+          setViewMode('daily'); // Reset to daily by default when switching to piket
+        }}>
+          Absensi Piket
         </button>
         <button style={mainTabStyle(activeTab === 'mapel')} onClick={() => setActiveTab('mapel')}>
           Absen per Mata Pelajaran
-        </button>
-        <button style={mainTabStyle(activeTab === 'rekap')} onClick={() => setActiveTab('rekap')}>
-          Rekap Piket Bulanan
         </button>
       </div>
 
       {/* Filters Row */}
       <div style={{
-        display: 'flex', gap: 'var(--space-3)', marginBottom: 'var(--space-4)', flexWrap: 'wrap', alignItems: 'flex-end',
+        display: 'flex', 
+        justifyContent: 'space-between', 
+        alignItems: 'flex-end', 
+        marginBottom: 'var(--space-4)', 
+        flexWrap: 'wrap', 
+        gap: 'var(--space-3)'
       }}>
-        <div>
-          <label style={{ display: 'block', fontSize: '11px', fontWeight: 'var(--font-weight-semibold)', marginBottom: '4px', color: 'var(--color-text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-            Kelas
-          </label>
-          <select
-            value={selectedClass}
-            onChange={(e) => setSelectedClass(e.target.value)}
-            style={{
-              padding: '8px 14px', borderRadius: 'var(--radius-md)',
-              border: '1px solid var(--color-border)', fontSize: 'var(--font-size-sm)',
-              background: 'var(--color-surface)', minWidth: '150px',
-            }}
-          >
-            {classes.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
-          </select>
-        </div>
-        
-        {activeTab === 'rekap' ? (
+        {/* Left side filters */}
+        <div style={{ display: 'flex', gap: 'var(--space-3)', flexWrap: 'wrap', alignItems: 'flex-end' }}>
           <div>
             <label style={{ display: 'block', fontSize: '11px', fontWeight: 'var(--font-weight-semibold)', marginBottom: '4px', color: 'var(--color-text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-              Bulan
-            </label>
-            <input
-              type="month" value={rekapMonth}
-              onChange={(e) => setRekapMonth(e.target.value)}
-              style={{
-                padding: '8px 14px', borderRadius: 'var(--radius-md)',
-                border: '1px solid var(--color-border)', fontSize: 'var(--font-size-sm)',
-                background: 'var(--color-surface)',
-              }}
-            />
-          </div>
-        ) : (
-          <div>
-            <label style={{ display: 'block', fontSize: '11px', fontWeight: 'var(--font-weight-semibold)', marginBottom: '4px', color: 'var(--color-text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-              Tanggal
-            </label>
-            <input
-              type="date" value={selectedDate}
-              onChange={(e) => setSelectedDate(e.target.value)}
-              style={{
-                padding: '8px 14px', borderRadius: 'var(--radius-md)',
-                border: '1px solid var(--color-border)', fontSize: 'var(--font-size-sm)',
-                background: 'var(--color-surface)',
-              }}
-            />
-          </div>
-        )}
-
-        {activeTab === 'piket' && (
-          <div style={{ display: 'flex', gap: '6px' }}>
-            <button style={sesiTabStyle(sesi === 'pagi')} onClick={() => setSesi('pagi')}>Pagi</button>
-            <button style={sesiTabStyle(sesi === 'sore')} onClick={() => setSesi('sore')}>Sore</button>
-          </div>
-        )}
-
-        {activeTab === 'mapel' && (
-          <div>
-            <label style={{ display: 'block', fontSize: '11px', fontWeight: 'var(--font-weight-semibold)', marginBottom: '4px', color: 'var(--color-text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-              Mata Pelajaran
+              Kelas
             </label>
             <select
-              value={selectedSubject}
-              onChange={(e) => setSelectedSubject(e.target.value)}
+              value={selectedClass}
+              onChange={(e) => setSelectedClass(e.target.value)}
               style={{
                 padding: '8px 14px', borderRadius: 'var(--radius-md)',
                 border: '1px solid var(--color-border)', fontSize: 'var(--font-size-sm)',
-                background: 'var(--color-surface)', minWidth: '200px',
+                background: 'var(--color-surface)', minWidth: '150px',
               }}
             >
-              {subjects.map(s => <option key={s.id} value={s.name}>{s.name}</option>)}
+              {classes.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
             </select>
+          </div>
+          
+          {activeTab === 'piket' && viewMode === 'monthly' ? (
+            <div>
+              <label style={{ display: 'block', fontSize: '11px', fontWeight: 'var(--font-weight-semibold)', marginBottom: '4px', color: 'var(--color-text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                Bulan
+              </label>
+              <input
+                type="month" value={rekapMonth}
+                onChange={(e) => setRekapMonth(e.target.value)}
+                style={{
+                  padding: '8px 14px', borderRadius: 'var(--radius-md)',
+                  border: '1px solid var(--color-border)', fontSize: 'var(--font-size-sm)',
+                  background: 'var(--color-surface)',
+                }}
+              />
+            </div>
+          ) : (
+            <div>
+              <label style={{ display: 'block', fontSize: '11px', fontWeight: 'var(--font-weight-semibold)', marginBottom: '4px', color: 'var(--color-text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                Tanggal
+              </label>
+              <input
+                type="date" value={selectedDate}
+                onChange={(e) => setSelectedDate(e.target.value)}
+                style={{
+                  padding: '8px 14px', borderRadius: 'var(--radius-md)',
+                  border: '1px solid var(--color-border)', fontSize: 'var(--font-size-sm)',
+                  background: 'var(--color-surface)',
+                }}
+              />
+            </div>
+          )}
+
+          {activeTab === 'piket' && viewMode === 'daily' && (
+            <div style={{ display: 'flex', gap: '6px' }}>
+              <button style={sesiTabStyle(sesi === 'pagi')} onClick={() => setSesi('pagi')}>Pagi</button>
+              <button style={sesiTabStyle(sesi === 'sore')} onClick={() => setSesi('sore')}>Sore</button>
+            </div>
+          )}
+
+          {activeTab === 'mapel' && (
+            <div>
+              <label style={{ display: 'block', fontSize: '11px', fontWeight: 'var(--font-weight-semibold)', marginBottom: '4px', color: 'var(--color-text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                Mata Pelajaran
+              </label>
+              <select
+                value={selectedSubject}
+                onChange={(e) => setSelectedSubject(e.target.value)}
+                style={{
+                  padding: '8px 14px', borderRadius: 'var(--radius-md)',
+                  border: '1px solid var(--color-border)', fontSize: 'var(--font-size-sm)',
+                  background: 'var(--color-surface)', minWidth: '200px',
+                }}
+              >
+                {subjects.map(s => <option key={s.id} value={s.name}>{s.name}</option>)}
+              </select>
+            </div>
+          )}
+        </div>
+
+        {/* Right side buttons (Toggle View for Piket) */}
+        {activeTab === 'piket' && (
+          <div>
+            <Button 
+              variant="primary" 
+              onClick={() => setViewMode(viewMode === 'daily' ? 'monthly' : 'daily')}
+              style={{
+                backgroundColor: '#3B82F6', 
+                color: 'white',
+                border: 'none',
+                height: '38px',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px'
+              }}
+            >
+              {viewMode === 'daily' ? '📊 Lihat Rekap Bulanan' : '📝 Lihat Absen Harian'}
+            </Button>
           </div>
         )}
       </div>
 
-      {activeTab === 'piket' && (
+      {activeTab === 'piket' && viewMode === 'daily' && (
         <>
-          {/* Summary Piket */}
+          {/* Summary Piket Daily */}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(100px, 1fr))', gap: 'var(--space-2)', marginBottom: 'var(--space-4)' }}>
             {[
               { label: 'Hadir', value: countsPiket.hadir, color: '#059669', bg: '#ECFDF5' },
@@ -412,30 +443,34 @@ export default function AbsensiPage() {
       )}
 
       {/* Table */}
-      <Card padding={activeTab === 'rekap' ? "var(--space-4) 0 0 0" : "0"}>
+      <Card padding={activeTab === 'piket' && viewMode === 'monthly' ? "var(--space-4) 0 0 0" : "0"}>
         {activeTab === 'piket' ? (
-          loadingPiket ? (
-            <LoadingSpinner message="Memuat data absensi piket..." />
+          viewMode === 'daily' ? (
+            loadingPiket ? (
+              <LoadingSpinner message="Memuat data absensi piket..." />
+            ) : (
+              <Table
+                columns={[
+                  { key: 'no', label: 'No', width: '50px', render: (_, row, i) => i + 1 },
+                  { key: 'studentName', label: 'Nama Siswa' },
+                  { key: 'statusPagi', label: 'Pagi', width: '90px', render: (val) => statusBadge(val) },
+                  { key: 'statusSore', label: 'Sore', width: '90px', render: (val) => statusBadge(val) },
+                  { key: 'warning', label: '', width: '40px',
+                    render: (_, row) => (
+                      row.statusPagi === 'hadir' && row.statusSore === 'alpha'
+                        ? <span title="Terdeteksi bolos" style={{ fontSize: '16px' }}>⚠️</span>
+                        : null
+                    )
+                  },
+                ]}
+                data={attendancePiket}
+                emptyMessage="Belum ada data absensi piket."
+              />
+            )
           ) : (
-            <Table
-              columns={[
-                { key: 'no', label: 'No', width: '50px', render: (_, row, i) => i + 1 },
-                { key: 'studentName', label: 'Nama Siswa' },
-                { key: 'statusPagi', label: 'Pagi', width: '90px', render: (val) => statusBadge(val) },
-                { key: 'statusSore', label: 'Sore', width: '90px', render: (val) => statusBadge(val) },
-                { key: 'warning', label: '', width: '40px',
-                  render: (_, row) => (
-                    row.statusPagi === 'hadir' && row.statusSore === 'alpha'
-                      ? <span title="Terdeteksi bolos" style={{ fontSize: '16px' }}>⚠️</span>
-                      : null
-                  )
-                },
-              ]}
-              data={attendancePiket}
-              emptyMessage="Belum ada data absensi piket."
-            />
+            renderRekapTable()
           )
-        ) : activeTab === 'mapel' ? (
+        ) : (
           loadingMapel ? (
             <LoadingSpinner message="Memuat data absensi mapel..." />
           ) : (
@@ -445,8 +480,6 @@ export default function AbsensiPage() {
               emptyMessage="Belum ada data absensi untuk mata pelajaran ini." 
             />
           )
-        ) : (
-          renderRekapTable()
         )}
       </Card>
     </div>
