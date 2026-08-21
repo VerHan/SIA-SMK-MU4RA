@@ -641,11 +641,12 @@ export async function saveScheduleMatrix(day, records) {
 /* ============================================================
    ATTENDANCE (Siswa - Pagi & Sore)
    ============================================================ */
-export async function getAttendance(classFilter, dateFilter) {
+export async function getAttendance(classFilter, dateFilter, monthFilter) {
   await simulateNetwork();
   let data = [...attendanceList];
   if (classFilter) data = data.filter(a => a.class === classFilter);
   if (dateFilter) data = data.filter(a => a.date === dateFilter);
+  if (monthFilter) data = data.filter(a => a.date.startsWith(monthFilter)); // monthFilter is YYYY-MM
   return data;
 }
 
