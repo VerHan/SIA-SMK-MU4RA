@@ -158,12 +158,12 @@ export default function AbsensiPage() {
           for (let day = 1; day <= daysCount; day++) {
             const dateStr = `${rekapMonth}-${String(day).padStart(2, '0')}`;
             const att = rekapData.find(a => a.studentId === s.id && a.date === dateStr);
-            row[`Tgl ${day} (Pagi)`] = att?.statusPagi?.toUpperCase() || '-';
-            row[`Tgl ${day} (Sore)`] = att?.statusSore?.toUpperCase() || '-';
+            const statusVal = sesi === 'pagi' ? att?.statusPagi : att?.statusSore;
+            row[`Tgl ${day}`] = statusVal?.toUpperCase() || '-';
           }
           return row;
         });
-        fileName = `Rekap_Bulanan_${selectedClass}_${rekapMonth}.xlsx`;
+        fileName = `Rekap_Bulanan_${sesi.toUpperCase()}_${selectedClass}_${rekapMonth}.xlsx`;
       }
     } else if (activeTab === 'mapel') {
       exportData = attendanceMapel.map((a, i) => ({
@@ -225,26 +225,18 @@ export default function AbsensiPage() {
         <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: '1200px' }}>
           <thead>
             <tr>
-              <th rowSpan="2" style={{ padding: '12px', borderBottom: '1px solid var(--color-border)', borderRight: '1px solid var(--color-border)', background: 'var(--color-surface-alt)', textAlign: 'left', minWidth: '200px', position: 'sticky', left: 0, zIndex: 10 }}>Nama Siswa</th>
+              <th style={{ padding: '12px', borderBottom: '1px solid var(--color-border)', borderRight: '1px solid var(--color-border)', background: 'var(--color-surface-alt)', textAlign: 'left', minWidth: '200px', position: 'sticky', left: 0, zIndex: 10 }}>Nama Siswa</th>
               {daysArray.map(day => (
-                <th key={day} colSpan="2" style={{ padding: '8px', borderBottom: '1px solid var(--color-border)', borderRight: '1px solid var(--color-border)', background: 'var(--color-surface-alt)', textAlign: 'center', fontSize: '12px' }}>
+                <th key={day} style={{ padding: '8px', borderBottom: '1px solid var(--color-border)', borderRight: '1px solid var(--color-border)', background: 'var(--color-surface-alt)', textAlign: 'center', fontSize: '12px', minWidth: '30px' }}>
                   {day}
                 </th>
-              ))}
-            </tr>
-            <tr>
-              {daysArray.map(day => (
-                <Fragment key={`sub-${day}`}>
-                  <th style={{ padding: '6px', borderBottom: '1px solid var(--color-border)', borderRight: '1px solid var(--color-border)', background: 'var(--color-surface)', textAlign: 'center', fontSize: '10px', color: 'var(--color-text-secondary)' }}>P</th>
-                  <th style={{ padding: '6px', borderBottom: '1px solid var(--color-border)', borderRight: '1px solid var(--color-border)', background: 'var(--color-surface)', textAlign: 'center', fontSize: '10px', color: 'var(--color-text-secondary)' }}>S</th>
-                </Fragment>
               ))}
             </tr>
           </thead>
           <tbody>
             {students.length === 0 ? (
               <tr>
-                <td colSpan={1 + (daysCount * 2)} style={{ padding: '24px', textAlign: 'center', color: 'var(--color-text-muted)' }}>Tidak ada data siswa.</td>
+                <td colSpan={1 + daysCount} style={{ padding: '24px', textAlign: 'center', color: 'var(--color-text-muted)' }}>Tidak ada data siswa.</td>
               </tr>
             ) : (
               students.map(s => (
@@ -253,16 +245,12 @@ export default function AbsensiPage() {
                   {daysArray.map(day => {
                     const dateStr = `${rekapMonth}-${String(day).padStart(2, '0')}`;
                     const att = rekapData.find(a => a.studentId === s.id && a.date === dateStr);
+                    const attStatus = sesi === 'pagi' ? att?.statusPagi : att?.statusSore;
                     
                     return (
-                      <Fragment key={`cell-${s.id}-${day}`}>
-                        <td style={{ padding: '4px', borderBottom: '1px solid var(--color-border-light)', borderRight: '1px dotted var(--color-border-light)', textAlign: 'center', fontSize: '11px', fontWeight: 'bold', color: getStatusColor(att?.statusPagi) }}>
-                          {getStatusInitial(att?.statusPagi)}
-                        </td>
-                        <td style={{ padding: '4px', borderBottom: '1px solid var(--color-border-light)', borderRight: '1px solid var(--color-border-light)', textAlign: 'center', fontSize: '11px', fontWeight: 'bold', color: getStatusColor(att?.statusSore) }}>
-                          {getStatusInitial(att?.statusSore)}
-                        </td>
-                      </Fragment>
+                      <td key={`cell-${s.id}-${day}`} style={{ padding: '4px', borderBottom: '1px solid var(--color-border-light)', borderRight: '1px solid var(--color-border-light)', textAlign: 'center', fontSize: '11px', fontWeight: 'bold', color: getStatusColor(attStatus) }}>
+                        {getStatusInitial(attStatus)}
+                      </td>
                     );
                   })}
                 </tr>
@@ -363,7 +351,7 @@ export default function AbsensiPage() {
             </div>
           )}
 
-          {activeTab === 'piket' && viewMode === 'daily' && (
+          {activeTab === 'piket' && (
             <div style={{ display: 'flex', gap: '6px' }}>
               <button style={sesiTabStyle(sesi === 'pagi')} onClick={() => setSesi('pagi')}>Pagi</button>
               <button style={sesiTabStyle(sesi === 'sore')} onClick={() => setSesi('sore')}>Sore</button>
