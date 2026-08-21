@@ -5,6 +5,7 @@
 
 import { useState, useEffect } from 'react';
 import { useAuth } from '../../hooks/useAuth';
+import { useSettings } from '../../hooks/useSettings';
 import { submitTeacherAttendance, getTeacherAttendance } from '../../services/api';
 import { SCHOOL_GEOFENCE } from '../../config/constants';
 
@@ -25,6 +26,9 @@ const STATUS_COLORS = {
 
 export default function MobileAbsenGPSPage() {
   const { user } = useAuth();
+  const { settings } = useSettings();
+  const schoolGeofence = settings?.geofence || SCHOOL_GEOFENCE;
+
   const [coords, setCoords] = useState(null);
   const [distance, setDistance] = useState(null);
   const [locating, setLocating] = useState(false);
@@ -68,7 +72,7 @@ export default function MobileAbsenGPSPage() {
       (pos) => {
         const { latitude, longitude } = pos.coords;
         setCoords({ latitude, longitude });
-        const dist = Math.round(calcDistance(latitude, longitude, SCHOOL_GEOFENCE.latitude, SCHOOL_GEOFENCE.longitude));
+        const dist = Math.round(calcDistance(latitude, longitude, schoolGeofence.latitude, schoolGeofence.longitude));
         setDistance(dist);
         setLocating(false);
         setPermissionStatus('granted');
@@ -97,12 +101,13 @@ export default function MobileAbsenGPSPage() {
     );
   };
 
+  const isWithin = distance !== null && distance <= schoolGeofence.radiusMeters;
+
   const handleAbsen = async (type) => {
     if (!coords) { setMessage({ type: 'error', text: 'Lokasi belum dideteksi. Tekan "Deteksi Lokasi" terlebih dahulu.' }); return; }
     
-    const isWithin = distance !== null && distance <= SCHOOL_GEOFENCE.radiusMeters;
     if (!isWithin) {
-      setMessage({ type: 'error', text: `Anda berada di luar area sekolah (${distance}m). Absensi ditolak.` });
+      setMessage({ type: 'error', text: `Anda berada di luar area sekolah (${distance}m). Jarak maksimal yang diizinkan ${schoolGeofence.radiusMeters}m.` });
       return;
     }
 
@@ -123,8 +128,6 @@ export default function MobileAbsenGPSPage() {
     }
     setSubmitting(false);
   };
-
-  const isWithin = distance !== null && distance <= SCHOOL_GEOFENCE.radiusMeters;
 
   return (
     <div style={{ padding: '16px 20px', animation: 'fadeInUp 0.4s ease' }}>
@@ -198,8 +201,11 @@ export default function MobileAbsenGPSPage() {
             <p style={{ fontSize: '15px', fontWeight: 600, color: isWithin ? '#059669' : '#D97706', margin: '0 0 4px' }}>
               {isWithin ? 'Dalam Area Sekolah' : 'Di Luar Area Sekolah'}
             </p>
-            <p style={{ fontSize: '13px', color: '#64748B', margin: 0 }}>
-              Jarak: {distance} m dari sekolah (radius {SCHOOL_GEOFENCE.radiusMeters} m)
+            <p style={{ fontSize: '13px', color: '#64748B', margin: '0 0 6px' }}>
+              Jarak: <strong>{distance} m</strong> dari sekolah (radius {schoolGeofence.radiusMeters} m)
+            </p>
+            <p style={{ fontSize: '11px', color: '#94A3B8', margin: 0 }}>
+              Koordinat Anda: {coords.latitude.toFixed(6)}, {coords.longitude.toFixed(6)}
             </p>
           </>
         ) : (

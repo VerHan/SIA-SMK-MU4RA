@@ -8,7 +8,13 @@ export function useSettings() {
     try {
       const saved = localStorage.getItem(SETTINGS_KEY);
       if (saved) {
-        return JSON.parse(saved);
+        const parsed = JSON.parse(saved);
+        // If old mock coordinates were saved, migrate to new official coordinates
+        if (parsed.geofence?.latitude === -6.5295) {
+          parsed.geofence = DEFAULT_GEOFENCE;
+          localStorage.setItem(SETTINGS_KEY, JSON.stringify(parsed));
+        }
+        return parsed;
       }
     } catch (error) {
       console.error('Failed to parse settings from localStorage', error);

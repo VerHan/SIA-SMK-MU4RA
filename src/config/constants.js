@@ -14,9 +14,9 @@ export const SCHOOL_INFO = {
 
 /* --- Koordinat GPS Lokasi Sekolah & Geofencing --- */
 export const SCHOOL_GEOFENCE = {
-  latitude: -6.5295,      /* Koordinat Bangsri, Jepara */
-  longitude: 110.7482,
-  radiusMeters: 100,      /* Radius 100 meter dari area sekolah */
+  latitude: -6.5194526,   /* Koordinat resmi Dapodik SMK Muhammadiyah 04 Bangsri (Wedelan) */
+  longitude: 110.7783316,
+  radiusMeters: 250,      /* Radius 250 meter mencakup seluruh area gedung sekolah */
 };
 
 /* --- Definisi Role Pengguna --- */
