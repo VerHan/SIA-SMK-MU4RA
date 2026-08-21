@@ -230,30 +230,57 @@ export default function GuruAbsenPiketPage() {
                   {day}
                 </th>
               ))}
+              <th style={{ padding: '8px', borderBottom: '1px solid var(--color-border)', borderRight: '1px solid var(--color-border)', background: '#ECFDF5', color: '#059669', textAlign: 'center', fontSize: '12px', minWidth: '40px' }}>H</th>
+              <th style={{ padding: '8px', borderBottom: '1px solid var(--color-border)', borderRight: '1px solid var(--color-border)', background: '#EFF6FF', color: '#2563EB', textAlign: 'center', fontSize: '12px', minWidth: '40px' }}>I</th>
+              <th style={{ padding: '8px', borderBottom: '1px solid var(--color-border)', borderRight: '1px solid var(--color-border)', background: '#FFFBEB', color: '#D97706', textAlign: 'center', fontSize: '12px', minWidth: '40px' }}>S</th>
+              <th style={{ padding: '8px', borderBottom: '1px solid var(--color-border)', borderRight: '1px solid var(--color-border)', background: '#FEF2F2', color: '#DC2626', textAlign: 'center', fontSize: '12px', minWidth: '40px' }}>A</th>
+              <th style={{ padding: '8px', borderBottom: '1px solid var(--color-border)', borderRight: '1px solid var(--color-border)', background: 'var(--color-surface-alt)', textAlign: 'center', fontSize: '12px', minWidth: '50px' }}>%</th>
             </tr>
           </thead>
           <tbody>
             {students.length === 0 ? (
               <tr>
-                <td colSpan={1 + daysCount} style={{ padding: '24px', textAlign: 'center', color: 'var(--color-text-muted)' }}>Tidak ada data siswa.</td>
+                <td colSpan={1 + daysCount + 5} style={{ padding: '24px', textAlign: 'center', color: 'var(--color-text-muted)' }}>Tidak ada data siswa.</td>
               </tr>
             ) : (
-              students.map(s => (
-                <tr key={s.id}>
-                  <td style={{ padding: '10px 12px', borderBottom: '1px solid var(--color-border-light)', borderRight: '1px solid var(--color-border-light)', fontSize: '13px', fontWeight: '500', position: 'sticky', left: 0, background: 'var(--color-surface)', zIndex: 1 }}>{s.name}</td>
-                  {daysArray.map(day => {
-                    const dateStr = `${rekapMonth}-${String(day).padStart(2, '0')}`;
-                    const att = rekapData.find(a => a.studentId === s.id && a.date === dateStr);
-                    const attStatus = sesi === 'pagi' ? att?.statusPagi : att?.statusSore;
-                    
-                    return (
-                      <td key={`cell-${s.id}-${day}`} style={{ padding: '4px', borderBottom: '1px solid var(--color-border-light)', borderRight: '1px solid var(--color-border-light)', textAlign: 'center', fontSize: '11px', fontWeight: 'bold', color: getStatusColor(attStatus) }}>
-                        {getStatusInitial(attStatus)}
-                      </td>
-                    );
-                  })}
-                </tr>
-              ))
+              students.map(s => {
+                let totalH = 0, totalI = 0, totalS = 0, totalA = 0;
+                
+                return (
+                  <tr key={s.id}>
+                    <td style={{ padding: '10px 12px', borderBottom: '1px solid var(--color-border-light)', borderRight: '1px solid var(--color-border-light)', fontSize: '13px', fontWeight: '500', position: 'sticky', left: 0, background: 'var(--color-surface)', zIndex: 1 }}>{s.name}</td>
+                    {daysArray.map(day => {
+                      const dateStr = `${rekapMonth}-${String(day).padStart(2, '0')}`;
+                      const att = rekapData.find(a => a.studentId === s.id && a.date === dateStr);
+                      const attStatus = sesi === 'pagi' ? att?.statusPagi : att?.statusSore;
+                      
+                      if (attStatus === 'hadir') totalH++;
+                      else if (attStatus === 'izin') totalI++;
+                      else if (attStatus === 'sakit') totalS++;
+                      else if (attStatus === 'alpha') totalA++;
+                      
+                      return (
+                        <td key={`cell-${s.id}-${day}`} style={{ padding: '4px', borderBottom: '1px solid var(--color-border-light)', borderRight: '1px solid var(--color-border-light)', textAlign: 'center', fontSize: '11px', fontWeight: 'bold', color: getStatusColor(attStatus) }}>
+                          {getStatusInitial(attStatus)}
+                        </td>
+                      );
+                    })}
+                    {(() => {
+                      const totalDays = totalH + totalI + totalS + totalA;
+                      const percentage = totalDays > 0 ? Math.round((totalH / totalDays) * 100) : 0;
+                      return (
+                        <>
+                          <td style={{ padding: '4px', borderBottom: '1px solid var(--color-border-light)', borderRight: '1px solid var(--color-border-light)', textAlign: 'center', fontSize: '11px', fontWeight: 'bold', background: '#ECFDF5', color: '#059669' }}>{totalH}</td>
+                          <td style={{ padding: '4px', borderBottom: '1px solid var(--color-border-light)', borderRight: '1px solid var(--color-border-light)', textAlign: 'center', fontSize: '11px', fontWeight: 'bold', background: '#EFF6FF', color: '#2563EB' }}>{totalI}</td>
+                          <td style={{ padding: '4px', borderBottom: '1px solid var(--color-border-light)', borderRight: '1px solid var(--color-border-light)', textAlign: 'center', fontSize: '11px', fontWeight: 'bold', background: '#FFFBEB', color: '#D97706' }}>{totalS}</td>
+                          <td style={{ padding: '4px', borderBottom: '1px solid var(--color-border-light)', borderRight: '1px solid var(--color-border-light)', textAlign: 'center', fontSize: '11px', fontWeight: 'bold', background: '#FEF2F2', color: '#DC2626' }}>{totalA}</td>
+                          <td style={{ padding: '4px', borderBottom: '1px solid var(--color-border-light)', borderRight: '1px solid var(--color-border-light)', textAlign: 'center', fontSize: '11px', fontWeight: 'bold', background: 'var(--color-surface)' }}>{percentage}%</td>
+                        </>
+                      );
+                    })()}
+                  </tr>
+                );
+              })
             )}
           </tbody>
         </table>
