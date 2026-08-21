@@ -1,30 +1,34 @@
+/* GuruAbsenPiketPage — Input Absen Piket Pagi/Sore & Rekap Bulanan */
+
 import { useState, useEffect, Fragment } from 'react';
-import { getStudents, getClasses, saveAttendance, getAttendance } from '../../services/api';
+import { getClasses, getStudents, getAttendance, saveAttendance } from '../../services/api';
 import Card from '../../components/ui/Card';
 import Table from '../../components/ui/Table';
 import Button from '../../components/ui/Button';
-import Toast from '../../components/ui/Toast';
 import LoadingSpinner from '../../components/ui/LoadingSpinner';
+import Toast from '../../components/ui/Toast';
 
 export default function GuruAbsenPiketPage() {
   const [activeTab, setActiveTab] = useState('input'); // 'input' | 'rekap'
+
   const [classes, setClasses] = useState([]);
-  const [students, setStudents] = useState([]);
   const [selectedClass, setSelectedClass] = useState('');
   
-  // Tab Input State
+  // States for Input Harian
+  const [students, setStudents] = useState([]);
   const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
-  const [sesi, setSesi] = useState('pagi'); // 'pagi' | 'sore'
-  const [loading, setLoading] = useState(true);
+  const [sesi, setSesi] = useState('pagi'); /* 'pagi' | 'sore' */
+  const [loading, setLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [toast, setToast] = useState(null);
-  
+
+  // States for Kehadiran Pagi & Sore
   const [attendancePagi, setAttendancePagi] = useState({});
   const [attendanceSore, setAttendanceSore] = useState({});
 
-  // Tab Rekap State
+  // States for Rekap Bulanan
   const [rekapMonth, setRekapMonth] = useState(new Date().toISOString().substring(0, 7)); // YYYY-MM
-  const [rekapData, setRekapData] = useState([]); // Attendance data for the month
+  const [rekapData, setRekapData] = useState([]);
   const [rekapLoading, setRekapLoading] = useState(false);
 
   useEffect(() => {
@@ -34,34 +38,33 @@ export default function GuruAbsenPiketPage() {
     });
   }, []);
 
-  // Fetch data for Input Harian
+  // Fetch Input Data
   useEffect(() => {
     if (selectedClass && activeTab === 'input') {
       setLoading(true);
       Promise.all([
         getStudents(selectedClass),
-        getAttendance(selectedClass, selectedDate, null)
+        getAttendance(selectedClass, selectedDate)
       ]).then(([studentsData, attData]) => {
         setStudents(studentsData);
         
-        const initPagi = {};
-        const initSore = {};
-        
+        // Populate existing data or default to 'hadir'
+        const initialPagi = {};
+        const initialSore = {};
         studentsData.forEach(s => {
-          // Find existing record for this student on this date
           const existing = attData.find(a => a.studentId === s.id);
-          initPagi[s.id] = existing?.statusPagi || 'hadir';
-          initSore[s.id] = existing?.statusSore || 'hadir';
+          initialPagi[s.id] = existing?.statusPagi || 'hadir';
+          initialSore[s.id] = existing?.statusSore || 'hadir';
         });
         
-        setAttendancePagi(initPagi);
-        setAttendanceSore(initSore);
+        setAttendancePagi(initialPagi);
+        setAttendanceSore(initialSore);
         setLoading(false);
       });
     }
   }, [selectedClass, selectedDate, activeTab]);
 
-  // Fetch data for Rekap Bulanan
+  // Fetch Rekap Data
   useEffect(() => {
     if (selectedClass && activeTab === 'rekap') {
       setRekapLoading(true);
@@ -92,29 +95,18 @@ export default function GuruAbsenPiketPage() {
       class: selectedClass,
       date: selectedDate,
       statusPagi: attendancePagi[s.id],
-      statusSore: attendanceSore[s.id]
+      statusSore: attendanceSore[s.id],
     }));
 
-    const res = await saveAttendance(records);
+    const result = await saveAttendance(records);
     setSubmitting(false);
-
-    if (res.success) {
-      setToast({ type: 'success', message: 'Absensi berhasil disimpan!' });
+    
+    if (result.success) {
+      setToast({ message: `Absensi ${sesi} kelas ${selectedClass} berhasil disimpan!`, type: 'success' });
     } else {
-      setToast({ type: 'error', message: 'Gagal menyimpan absensi.' });
+      setToast({ message: result.error || 'Gagal menyimpan absensi.', type: 'error' });
     }
   };
-
-  const mainTabStyle = (active) => ({
-    padding: '10px 24px',
-    fontSize: 'var(--font-size-sm)',
-    fontWeight: 'var(--font-weight-bold)',
-    color: active ? '#1E40AF' : 'var(--color-text-secondary)',
-    borderBottom: active ? '3px solid #3B82F6' : '3px solid transparent',
-    background: 'transparent',
-    cursor: 'pointer',
-    transition: 'all var(--transition-fast)',
-  });
 
   const sesiTabStyle = (active) => ({
     padding: '8px 20px',
@@ -129,12 +121,12 @@ export default function GuruAbsenPiketPage() {
   });
 
   const StatusButton = ({ status, currentStatus, onClick }) => {
-    const isSelected = status === currentStatus;
+    const isSelected = currentStatus === status;
     const colors = {
-      hadir: { bg: '#10B981', color: '#fff' },
-      izin: { bg: '#3B82F6', color: '#fff' },
-      sakit: { bg: '#F59E0B', color: '#fff' },
-      alpha: { bg: '#EF4444', color: '#fff' }
+      hadir: { bg: '#10B981', color: 'white' },
+      izin: { bg: '#3B82F6', color: 'white' },
+      sakit: { bg: '#F59E0B', color: 'white' },
+      alpha: { bg: '#EF4444', color: 'white' },
     };
     
     return (
@@ -214,26 +206,18 @@ export default function GuruAbsenPiketPage() {
         <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: '1200px' }}>
           <thead>
             <tr>
-              <th rowSpan="2" style={{ padding: '12px', borderBottom: '1px solid var(--color-border)', borderRight: '1px solid var(--color-border)', background: 'var(--color-surface-alt)', textAlign: 'left', minWidth: '200px', position: 'sticky', left: 0, zIndex: 10 }}>Nama Siswa</th>
+              <th style={{ padding: '12px', borderBottom: '1px solid var(--color-border)', borderRight: '1px solid var(--color-border)', background: 'var(--color-surface-alt)', textAlign: 'left', minWidth: '200px', position: 'sticky', left: 0, zIndex: 10 }}>Nama Siswa</th>
               {daysArray.map(day => (
-                <th key={day} colSpan="2" style={{ padding: '8px', borderBottom: '1px solid var(--color-border)', borderRight: '1px solid var(--color-border)', background: 'var(--color-surface-alt)', textAlign: 'center', fontSize: '12px' }}>
+                <th key={day} style={{ padding: '8px', borderBottom: '1px solid var(--color-border)', borderRight: '1px solid var(--color-border)', background: 'var(--color-surface-alt)', textAlign: 'center', fontSize: '12px', minWidth: '30px' }}>
                   {day}
                 </th>
-              ))}
-            </tr>
-            <tr>
-              {daysArray.map(day => (
-                <Fragment key={`sub-${day}`}>
-                  <th style={{ padding: '6px', borderBottom: '1px solid var(--color-border)', borderRight: '1px solid var(--color-border)', background: 'var(--color-surface)', textAlign: 'center', fontSize: '10px', color: 'var(--color-text-secondary)' }}>P</th>
-                  <th style={{ padding: '6px', borderBottom: '1px solid var(--color-border)', borderRight: '1px solid var(--color-border)', background: 'var(--color-surface)', textAlign: 'center', fontSize: '10px', color: 'var(--color-text-secondary)' }}>S</th>
-                </Fragment>
               ))}
             </tr>
           </thead>
           <tbody>
             {students.length === 0 ? (
               <tr>
-                <td colSpan={1 + (daysCount * 2)} style={{ padding: '24px', textAlign: 'center', color: 'var(--color-text-muted)' }}>Tidak ada data siswa.</td>
+                <td colSpan={1 + daysCount} style={{ padding: '24px', textAlign: 'center', color: 'var(--color-text-muted)' }}>Tidak ada data siswa.</td>
               </tr>
             ) : (
               students.map(s => (
@@ -242,16 +226,12 @@ export default function GuruAbsenPiketPage() {
                   {daysArray.map(day => {
                     const dateStr = `${rekapMonth}-${String(day).padStart(2, '0')}`;
                     const att = rekapData.find(a => a.studentId === s.id && a.date === dateStr);
+                    const attStatus = sesi === 'pagi' ? att?.statusPagi : att?.statusSore;
                     
                     return (
-                      <Fragment key={`cell-${s.id}-${day}`}>
-                        <td style={{ padding: '4px', borderBottom: '1px solid var(--color-border-light)', borderRight: '1px dotted var(--color-border-light)', textAlign: 'center', fontSize: '11px', fontWeight: 'bold', color: getStatusColor(att?.statusPagi) }}>
-                          {getStatusInitial(att?.statusPagi)}
-                        </td>
-                        <td style={{ padding: '4px', borderBottom: '1px solid var(--color-border-light)', borderRight: '1px solid var(--color-border-light)', textAlign: 'center', fontSize: '11px', fontWeight: 'bold', color: getStatusColor(att?.statusSore) }}>
-                          {getStatusInitial(att?.statusSore)}
-                        </td>
-                      </Fragment>
+                      <td key={`cell-${s.id}-${day}`} style={{ padding: '4px', borderBottom: '1px solid var(--color-border-light)', borderRight: '1px solid var(--color-border-light)', textAlign: 'center', fontSize: '11px', fontWeight: 'bold', color: getStatusColor(attStatus) }}>
+                        {getStatusInitial(attStatus)}
+                      </td>
                     );
                   })}
                 </tr>
@@ -267,24 +247,13 @@ export default function GuruAbsenPiketPage() {
     <div style={{ animation: 'fadeIn 300ms ease' }}>
       {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
 
-      <div style={{ marginBottom: 'var(--space-6)', display: 'flex', gap: 'var(--space-4)', borderBottom: '1px solid var(--color-border-light)' }}>
-        <button style={mainTabStyle(activeTab === 'input')} onClick={() => setActiveTab('input')}>
-          Input Harian
-        </button>
-        <button style={mainTabStyle(activeTab === 'rekap')} onClick={() => setActiveTab('rekap')}>
-          Rekap Bulanan
-        </button>
-      </div>
-
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 'var(--space-4)', flexWrap: 'wrap', gap: 'var(--space-4)' }}>
         <div>
           <h1 style={{ fontSize: 'var(--font-size-2xl)', fontWeight: 'var(--font-weight-extrabold)' }}>
-            {activeTab === 'input' ? 'Input Absen Piket' : 'Rekap Absen Piket'}
+            Absen Piket Harian
           </h1>
           <p style={{ color: 'var(--color-text-secondary)', marginTop: '4px' }}>
-            {activeTab === 'input' 
-              ? 'Input presensi kedatangan (pagi) dan kepulangan (sore).' 
-              : 'Pantau riwayat absensi siswa secara menyeluruh per bulan.'}
+            Input kehadiran harian dan pantau rekap bulanan kelas.
           </p>
         </div>
         {activeTab === 'input' && (
@@ -295,23 +264,24 @@ export default function GuruAbsenPiketPage() {
       </div>
 
       <Card style={{ marginBottom: 'var(--space-4)' }}>
-        <div style={{ display: 'flex', gap: 'var(--space-4)', flexWrap: 'wrap', alignItems: 'flex-end' }}>
-          <div>
-            <label style={{ display: 'block', fontSize: '12px', fontWeight: 'bold', marginBottom: '4px' }}>Kelas</label>
-            <select
-              value={selectedClass}
-              onChange={(e) => setSelectedClass(e.target.value)}
-              style={{
-                padding: '8px 12px', borderRadius: 'var(--radius-md)', border: '1px solid var(--color-border)',
-                background: 'var(--color-surface)', minWidth: '150px'
-              }}
-            >
-              {classes.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
-            </select>
-          </div>
-          
-          {activeTab === 'input' ? (
-            <>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', flexWrap: 'wrap', gap: 'var(--space-3)' }}>
+          {/* Left Side Filters */}
+          <div style={{ display: 'flex', gap: 'var(--space-4)', flexWrap: 'wrap', alignItems: 'flex-end' }}>
+            <div>
+              <label style={{ display: 'block', fontSize: '12px', fontWeight: 'bold', marginBottom: '4px' }}>Kelas</label>
+              <select
+                value={selectedClass}
+                onChange={(e) => setSelectedClass(e.target.value)}
+                style={{
+                  padding: '8px 12px', borderRadius: 'var(--radius-md)', border: '1px solid var(--color-border)',
+                  background: 'var(--color-surface)', minWidth: '150px'
+                }}
+              >
+                {classes.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
+              </select>
+            </div>
+            
+            {activeTab === 'input' ? (
               <div>
                 <label style={{ display: 'block', fontSize: '12px', fontWeight: 'bold', marginBottom: '4px' }}>Tanggal</label>
                 <input
@@ -324,25 +294,45 @@ export default function GuruAbsenPiketPage() {
                   }}
                 />
               </div>
-              <div style={{ display: 'flex', gap: '6px' }}>
-                <button type="button" style={sesiTabStyle(sesi === 'pagi')} onClick={() => setSesi('pagi')}>Sesi Pagi</button>
-                <button type="button" style={sesiTabStyle(sesi === 'sore')} onClick={() => setSesi('sore')}>Sesi Sore</button>
+            ) : (
+              <div>
+                <label style={{ display: 'block', fontSize: '12px', fontWeight: 'bold', marginBottom: '4px' }}>Bulan (Rekap)</label>
+                <input
+                  type="month"
+                  value={rekapMonth}
+                  onChange={(e) => setRekapMonth(e.target.value)}
+                  style={{
+                    padding: '8px 12px', borderRadius: 'var(--radius-md)', border: '1px solid var(--color-border)',
+                    background: 'var(--color-surface)'
+                  }}
+                />
               </div>
-            </>
-          ) : (
-            <div>
-              <label style={{ display: 'block', fontSize: '12px', fontWeight: 'bold', marginBottom: '4px' }}>Bulan (Rekap)</label>
-              <input
-                type="month"
-                value={rekapMonth}
-                onChange={(e) => setRekapMonth(e.target.value)}
-                style={{
-                  padding: '8px 12px', borderRadius: 'var(--radius-md)', border: '1px solid var(--color-border)',
-                  background: 'var(--color-surface)'
-                }}
-              />
+            )}
+
+            <div style={{ display: 'flex', gap: '6px' }}>
+              <button type="button" style={sesiTabStyle(sesi === 'pagi')} onClick={() => setSesi('pagi')}>Sesi Pagi</button>
+              <button type="button" style={sesiTabStyle(sesi === 'sore')} onClick={() => setSesi('sore')}>Sesi Sore</button>
             </div>
-          )}
+          </div>
+
+          {/* Right Side Toggle Button */}
+          <div>
+            <Button 
+              variant="primary" 
+              onClick={() => setActiveTab(activeTab === 'input' ? 'rekap' : 'input')}
+              style={{
+                backgroundColor: '#3B82F6', 
+                color: 'white',
+                border: 'none',
+                height: '38px',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px'
+              }}
+            >
+              {activeTab === 'input' ? '📊 Lihat Rekap Bulanan' : '📝 Kembali ke Input'}
+            </Button>
+          </div>
         </div>
       </Card>
 
