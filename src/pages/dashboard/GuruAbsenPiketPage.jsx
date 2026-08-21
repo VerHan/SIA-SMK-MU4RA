@@ -1,7 +1,7 @@
 /* GuruAbsenPiketPage — Input Absen Piket Pagi/Sore & Rekap Bulanan */
 
 import { useState, useEffect, Fragment } from 'react';
-import { getClasses, getStudents, getAttendance, saveAttendance } from '../../services/api';
+import { getClasses, getStudents, getAttendance, saveAttendance, getAcademicYears } from '../../services/api';
 import Card from '../../components/ui/Card';
 import Table from '../../components/ui/Table';
 import Button from '../../components/ui/Button';
@@ -30,11 +30,29 @@ export default function GuruAbsenPiketPage() {
   const [rekapMonth, setRekapMonth] = useState(new Date().toISOString().substring(0, 7)); // YYYY-MM
   const [rekapData, setRekapData] = useState([]);
   const [rekapLoading, setRekapLoading] = useState(false);
+  const [availableMonths, setAvailableMonths] = useState([]);
 
   useEffect(() => {
-    getClasses().then(data => {
-      setClasses(data);
-      if (data.length > 0) setSelectedClass(data[0].name);
+    Promise.all([getClasses(), getAcademicYears()]).then(([classesData, yearsData]) => {
+      setClasses(classesData);
+      if (classesData.length > 0) setSelectedClass(classesData[0].name);
+
+      const activeYear = yearsData.find(y => y.isActive);
+      if (activeYear && activeYear.startDate && activeYear.endDate) {
+        const start = new Date(activeYear.startDate);
+        const end = new Date(activeYear.endDate);
+        const months = [];
+        let current = new Date(start.getFullYear(), start.getMonth(), 1);
+        while (current <= end) {
+          months.push({
+            value: current.toISOString().substring(0, 7),
+            label: current.toLocaleDateString('id-ID', { month: 'long', year: 'numeric' })
+          });
+          current.setMonth(current.getMonth() + 1);
+        }
+        setAvailableMonths(months);
+        setRekapMonth(prev => months.some(m => m.value === prev) ? prev : (months[0]?.value || prev));
+      }
     });
   }, []);
 
@@ -297,15 +315,28 @@ export default function GuruAbsenPiketPage() {
             ) : (
               <div>
                 <label style={{ display: 'block', fontSize: '12px', fontWeight: 'bold', marginBottom: '4px' }}>Bulan (Rekap)</label>
-                <input
-                  type="month"
-                  value={rekapMonth}
-                  onChange={(e) => setRekapMonth(e.target.value)}
-                  style={{
-                    padding: '8px 12px', borderRadius: 'var(--radius-md)', border: '1px solid var(--color-border)',
-                    background: 'var(--color-surface)'
-                  }}
-                />
+                {availableMonths.length > 0 ? (
+                  <select
+                    value={rekapMonth}
+                    onChange={(e) => setRekapMonth(e.target.value)}
+                    style={{
+                      padding: '8px 12px', borderRadius: 'var(--radius-md)', border: '1px solid var(--color-border)',
+                      background: 'var(--color-surface)'
+                    }}
+                  >
+                    {availableMonths.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
+                  </select>
+                ) : (
+                  <input
+                    type="month"
+                    value={rekapMonth}
+                    onChange={(e) => setRekapMonth(e.target.value)}
+                    style={{
+                      padding: '8px 12px', borderRadius: 'var(--radius-md)', border: '1px solid var(--color-border)',
+                      background: 'var(--color-surface)'
+                    }}
+                  />
+                )}
               </div>
             )}
 

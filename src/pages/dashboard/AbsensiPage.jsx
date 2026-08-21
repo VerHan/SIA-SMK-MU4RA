@@ -2,7 +2,7 @@
 
 import { useState, useEffect, Fragment } from 'react';
 import * as XLSX from 'xlsx';
-import { getAttendance, getSubjectAttendance, getClasses, getSubjects, getStudents } from '../../services/api';
+import { getAttendance, getSubjectAttendance, getClasses, getSubjects, getStudents, getAcademicYears } from '../../services/api';
 import Card from '../../components/ui/Card';
 import Table from '../../components/ui/Table';
 import Badge from '../../components/ui/Badge';
@@ -33,13 +33,31 @@ export default function AbsensiPage() {
   const [rekapMonth, setRekapMonth] = useState(new Date().toISOString().substring(0, 7)); // YYYY-MM
   const [rekapData, setRekapData] = useState([]);
   const [rekapLoading, setRekapLoading] = useState(false);
+  const [availableMonths, setAvailableMonths] = useState([]);
 
   useEffect(() => {
-    Promise.all([getClasses(), getSubjects()]).then(([clsData, subData]) => {
+    Promise.all([getClasses(), getSubjects(), getAcademicYears()]).then(([clsData, subData, yearsData]) => {
       setClasses(clsData);
       setSubjects(subData);
       if (clsData.length > 0) setSelectedClass(clsData[0].name);
       if (subData.length > 0) setSelectedSubject(subData[0].name);
+
+      const activeYear = yearsData.find(y => y.isActive);
+      if (activeYear && activeYear.startDate && activeYear.endDate) {
+        const start = new Date(activeYear.startDate);
+        const end = new Date(activeYear.endDate);
+        const months = [];
+        let current = new Date(start.getFullYear(), start.getMonth(), 1);
+        while (current <= end) {
+          months.push({
+            value: current.toISOString().substring(0, 7),
+            label: current.toLocaleDateString('id-ID', { month: 'long', year: 'numeric' })
+          });
+          current.setMonth(current.getMonth() + 1);
+        }
+        setAvailableMonths(months);
+        setRekapMonth(prev => months.some(m => m.value === prev) ? prev : (months[0]?.value || prev));
+      }
     });
   }, []);
 
@@ -324,15 +342,29 @@ export default function AbsensiPage() {
               <label style={{ display: 'block', fontSize: '11px', fontWeight: 'var(--font-weight-semibold)', marginBottom: '4px', color: 'var(--color-text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
                 Bulan
               </label>
-              <input
-                type="month" value={rekapMonth}
-                onChange={(e) => setRekapMonth(e.target.value)}
-                style={{
-                  padding: '8px 14px', borderRadius: 'var(--radius-md)',
-                  border: '1px solid var(--color-border)', fontSize: 'var(--font-size-sm)',
-                  background: 'var(--color-surface)',
-                }}
-              />
+              {availableMonths.length > 0 ? (
+                <select
+                  value={rekapMonth}
+                  onChange={(e) => setRekapMonth(e.target.value)}
+                  style={{
+                    padding: '8px 14px', borderRadius: 'var(--radius-md)',
+                    border: '1px solid var(--color-border)', fontSize: 'var(--font-size-sm)',
+                    background: 'var(--color-surface)', minWidth: '150px'
+                  }}
+                >
+                  {availableMonths.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
+                </select>
+              ) : (
+                <input
+                  type="month" value={rekapMonth}
+                  onChange={(e) => setRekapMonth(e.target.value)}
+                  style={{
+                    padding: '8px 14px', borderRadius: 'var(--radius-md)',
+                    border: '1px solid var(--color-border)', fontSize: 'var(--font-size-sm)',
+                    background: 'var(--color-surface)',
+                  }}
+                />
+              )}
             </div>
           ) : (
             <div>
