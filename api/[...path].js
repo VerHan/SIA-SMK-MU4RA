@@ -116,10 +116,10 @@ app.post('/api/guru/absen', async (req, res) => {
     const guru = await prisma.guru.findFirst({ where: { name: teacherName } });
     if (!guru) return res.status(404).json({ success: false, message: 'Guru tidak ditemukan' });
 
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-
-    const currentTime = new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', hour12: false });
+    const now = new Date();
+    const jktDateStr = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Jakarta' }).format(now);
+    const today = new Date(`${jktDateStr}T00:00:00.000Z`);
+    const currentTime = now.toLocaleTimeString('id-ID', { timeZone: 'Asia/Jakarta', hour: '2-digit', minute: '2-digit', hour12: false });
 
     let absensi = await prisma.absensiGuru.findFirst({
       where: { guruId: guru.id, tanggal: today }

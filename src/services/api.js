@@ -463,8 +463,10 @@ export async function submitTeacherAttendance({ teacherName, type, distanceMeter
     console.warn('Fallback untuk submit absensi guru:', err.message);
     
     // Implementasi Mock
-    const today = new Date().toISOString().split('T')[0];
-    const currentTime = new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', hour12: false });
+    const now = new Date();
+    const jktDateStr = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Jakarta' }).format(now);
+    const today = jktDateStr;
+    const currentTime = now.toLocaleTimeString('id-ID', { timeZone: 'Asia/Jakarta', hour: '2-digit', minute: '2-digit', hour12: false });
     
     const existingIndex = teacherAttendanceList.findIndex(a => a.guruName === teacherName && a.tanggal === today);
     
