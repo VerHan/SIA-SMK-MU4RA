@@ -221,7 +221,6 @@ export default function AbsensiPage() {
         });
         fileName = `Rekap_Bulanan_${sesi.toUpperCase()}_${selectedClass}_${rekapMonth}.xlsx`;
       }
-      }
     } else if (activeTab === 'mapel') {
       if (viewMode === 'monthly') {
         const [yearStr, monthStr] = rekapMonth.split('-');
