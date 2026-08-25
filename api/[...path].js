@@ -50,6 +50,48 @@ app.get('/api/ping', async (req, res) => {
   }
 });
 
+// --- KEEP ALIVE BOT ENDPOINTS ---
+app.post('/api/keep-alive/ping', async (req, res) => {
+  try {
+    const authHeader = req.headers.authorization;
+    const { pingType, triggeredBy, note } = req.body;
+    
+    // Simple verification for CRON bot
+    if (pingType === 'AUTO_BOT') {
+      const cronSecret = process.env.CRON_SECRET;
+      if (cronSecret && authHeader !== `Bearer ${cronSecret}`) {
+        return res.status(401).json({ error: 'Unauthorized CRON request' });
+      }
+    }
+
+    // Insert heartbeat record
+    const record = await prisma.systemHeartbeat.create({
+      data: {
+        pingType: pingType || 'MANUAL_ADMIN',
+        triggeredBy: triggeredBy || 'Admin',
+        note: note || 'Database ping'
+      }
+    });
+
+    res.status(200).json({ success: true, record });
+  } catch (error) {
+    console.error('Keep-Alive Ping Error:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.get('/api/keep-alive/status', async (req, res) => {
+  try {
+    const history = await prisma.systemHeartbeat.findMany({
+      orderBy: { createdAt: 'desc' },
+      take: 5
+    });
+    res.status(200).json({ success: true, history });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
 // --- API ROUTES ---
 
 // 1. Auth Login

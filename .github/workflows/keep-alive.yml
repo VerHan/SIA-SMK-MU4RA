@@ -1,0 +1,24 @@
+name: Supabase Keep-Alive Ping
+
+on:
+  schedule:
+    # Berjalan setiap 3 hari sekali pada jam 00:00 UTC
+    - cron: '0 0 */3 * *'
+  workflow_dispatch: # Mengizinkan eksekusi manual via GitHub UI
+
+jobs:
+  ping-database:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping Keep-Alive API
+        env:
+          # Pastikan Anda telah mengatur Repository Secrets di GitHub:
+          # 1. CRON_SECRET: Token rahasia yang sama dengan yang di Vercel/Supabase
+          # 2. API_URL: URL backend Anda (misal: https://domain-anda.vercel.app)
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          API_URL: ${{ secrets.API_URL }}
+        run: |
+          curl -X POST "${API_URL}/api/keep-alive/ping" \
+          -H "Content-Type: application/json" \
+          -H "Authorization: Bearer ${CRON_SECRET}" \
+          -d '{"pingType": "AUTO_BOT", "triggeredBy": "CRON_WORKER", "note": "Automated 3-day ping from GitHub Actions"}'

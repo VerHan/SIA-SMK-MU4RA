@@ -2,7 +2,7 @@
    PengaturanPage — Pengaturan Geofence Khusus Admin
    ============================================================ */
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { MapContainer, TileLayer, Circle, Marker, useMapEvents } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
@@ -40,6 +40,63 @@ export default function PengaturanPage() {
   });
   const [radius, setRadius] = useState(settings.geofence.radiusMeters);
   const [toast, setToast] = useState(null);
+
+  // --- KEEP ALIVE STATES ---
+  const [pingHistory, setPingHistory] = useState([]);
+  const [lastPingDate, setLastPingDate] = useState(null);
+  const [isPinging, setIsPinging] = useState(false);
+  const [daysUntilPause, setDaysUntilPause] = useState(7);
+
+  useEffect(() => {
+    fetchPingStatus();
+  }, []);
+
+  const fetchPingStatus = async () => {
+    try {
+      const res = await fetch('/api/keep-alive/status');
+      const data = await res.json();
+      if (data.success && data.history) {
+        setPingHistory(data.history);
+        if (data.history.length > 0) {
+          const lastDate = new Date(data.history[0].createdAt);
+          setLastPingDate(lastDate);
+          
+          const now = new Date();
+          const diffTime = Math.abs(now - lastDate);
+          const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
+          setDaysUntilPause(Math.max(0, 7 - diffDays));
+        }
+      }
+    } catch (err) {
+      console.error('Failed to fetch ping status:', err);
+    }
+  };
+
+  const handleManualPing = async () => {
+    setIsPinging(true);
+    try {
+      const res = await fetch('/api/keep-alive/ping', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          pingType: 'MANUAL_ADMIN',
+          triggeredBy: 'Admin (Manual)',
+          note: 'Manual ping from Settings UI'
+        })
+      });
+      const data = await res.json();
+      if (data.success) {
+        setToast({ type: 'success', message: '⚡ Database berhasil diping! Timer 7 hari telah di-reset' });
+        fetchPingStatus();
+      } else {
+        setToast({ type: 'error', message: data.error || 'Gagal melakukan ping database' });
+      }
+    } catch (err) {
+      setToast({ type: 'error', message: 'Gagal koneksi ke server' });
+    } finally {
+      setIsPinging(false);
+    }
+  };
 
   const handleSave = () => {
     updateGeofence({
@@ -150,6 +207,86 @@ export default function PengaturanPage() {
             <strong>Penting:</strong> Pastikan titik koordinat berada pas di area utama sekolah. Semua guru harus berada di dalam lingkaran (radius) untuk bisa absen.
           </div>
         </Card>
+      </div>
+
+      {/* Database Health Monitor */}
+      <div style={{ marginTop: 'var(--space-6)' }}>
+        <h2 style={{ fontSize: 'var(--font-size-xl)', fontWeight: 'var(--font-weight-bold)', marginBottom: 'var(--space-4)' }}>
+          🗄️ Database Health & Inactivity Monitor
+        </h2>
+        
+        <div className="pengaturan-grid-container">
+          <Card>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 'var(--space-4)' }}>
+              <div>
+                <h3 style={{ fontSize: 'var(--font-size-lg)', fontWeight: 'var(--font-weight-bold)' }}>Status Database</h3>
+                <p style={{ color: 'var(--color-text-secondary)', fontSize: 'var(--font-size-sm)' }}>
+                  Mencegah auto-pause dari Supabase Free Tier.
+                </p>
+              </div>
+              <div style={{ 
+                padding: '4px 12px', 
+                borderRadius: '999px', 
+                fontWeight: 'bold', 
+                fontSize: 'var(--font-size-sm)',
+                background: daysUntilPause > 3 ? '#d1fae5' : '#fef3c7',
+                color: daysUntilPause > 3 ? '#065f46' : '#92400e'
+              }}>
+                {daysUntilPause > 3 ? '🟢 Aktif / Sehat' : '🟠 Waspada / Perlu Ping'}
+              </div>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--space-4)', marginBottom: 'var(--space-6)' }}>
+              <div style={{ background: 'var(--color-bg)', padding: 'var(--space-3)', borderRadius: 'var(--radius-md)' }}>
+                <div style={{ fontSize: 'var(--font-size-xs)', color: 'var(--color-text-secondary)' }}>Aktivitas Terakhir</div>
+                <div style={{ fontWeight: 'bold' }}>
+                  {lastPingDate ? lastPingDate.toLocaleString('id-ID') : 'Belum ada data'}
+                </div>
+              </div>
+              <div style={{ background: 'var(--color-bg)', padding: 'var(--space-3)', borderRadius: 'var(--radius-md)' }}>
+                <div style={{ fontSize: 'var(--font-size-xs)', color: 'var(--color-text-secondary)' }}>Estimasi Auto-Pause</div>
+                <div style={{ fontWeight: 'bold', color: daysUntilPause <= 3 ? 'red' : 'inherit' }}>
+                  {daysUntilPause} Hari lagi
+                </div>
+              </div>
+            </div>
+
+            <Button fullWidth onClick={handleManualPing} disabled={isPinging}>
+              {isPinging ? '⏳ Pinging...' : '⚡ Ping Database Sekarang'}
+            </Button>
+          </Card>
+
+          <Card>
+            <h3 style={{ fontSize: 'var(--font-size-lg)', fontWeight: 'var(--font-weight-bold)', marginBottom: 'var(--space-4)' }}>
+              Riwayat Ping Terakhir
+            </h3>
+            
+            {pingHistory.length === 0 ? (
+              <div style={{ textAlign: 'center', padding: 'var(--space-4)', color: 'var(--color-text-secondary)' }}>
+                Belum ada riwayat ping.
+              </div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
+                {pingHistory.map((item) => (
+                  <div key={item.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: 'var(--space-2)', borderBottom: '1px solid var(--color-border)' }}>
+                    <div>
+                      <div style={{ fontWeight: 'bold', fontSize: 'var(--font-size-sm)' }}>
+                        {item.pingType === 'AUTO_BOT' ? '🤖 Auto Bot' : '👤 Manual Admin'}
+                      </div>
+                      <div style={{ fontSize: 'var(--font-size-xs)', color: 'var(--color-text-secondary)' }}>
+                        {item.triggeredBy} • {item.note}
+                      </div>
+                    </div>
+                    <div style={{ fontSize: 'var(--font-size-xs)', textAlign: 'right', color: 'var(--color-text-secondary)' }}>
+                      {new Date(item.createdAt).toLocaleDateString('id-ID')} <br/>
+                      {new Date(item.createdAt).toLocaleTimeString('id-ID')}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </Card>
+        </div>
       </div>
     </div>
   );

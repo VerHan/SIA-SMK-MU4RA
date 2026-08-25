@@ -275,3 +275,11 @@ model LogAktivitas {
   detail    String?
   createdAt DateTime @default(now())
 }
+
+model SystemHeartbeat {
+  id          String   @id @default(uuid())
+  pingType    String   // 'AUTO_BOT' atau 'MANUAL_ADMIN'
+  triggeredBy String   // nama user admin atau 'CRON_WORKER'
+  createdAt   DateTime @default(now())
+  note        String?
+}
