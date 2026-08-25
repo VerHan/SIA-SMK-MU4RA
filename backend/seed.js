@@ -1,4 +1,4 @@
-const { PrismaClient } = require('@prisma/client');
+import { PrismaClient } from '@prisma/client';
 const prisma = new PrismaClient();
 
 const MOCK_ACADEMIC_YEARS = [
@@ -27,6 +27,8 @@ const MOCK_SUBJECTS = [
 const MOCK_USERS = [
   { username: 'admin', password: 'admin123', name: 'Administrator', role: 'admin' },
   { username: 'guru1', password: 'guru123', name: 'Ahmad Fauzi, S.Pd.', role: 'guru' },
+  { username: 'guru2', password: 'guru123', name: 'Siti Nurhaliza, S.Kom.', role: 'guru' },
+  { username: 'guru3', password: 'guru123', name: 'Budi Santoso, S.T.', role: 'guru' },
   { username: 'siswa1', password: 'siswa123', name: 'Muhammad Rizki', role: 'siswa' },
 ];
 
@@ -71,9 +73,9 @@ async function main() {
   for (const user of MOCK_USERS) {
     let relatedData = {};
     if (user.role === 'guru') {
-      relatedData.guruId = guruList.find(g => g.nama === user.name)?.id;
+      relatedData.teacherId = guruList.find(g => g.name === user.name)?.id;
     } else if (user.role === 'siswa') {
-      relatedData.siswaId = siswaList.find(s => s.nama === user.name)?.id;
+      relatedData.studentId = siswaList.find(s => s.name === user.name)?.id;
     }
     
     await prisma.user.create({
