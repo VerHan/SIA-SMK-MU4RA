@@ -41,10 +41,14 @@ model User {
   password  String
   name      String
   role      String   // admin, guru, staff, wali_murid, kepsek
-  teacherId String?  // Optional
-  studentId String?  // Optional
+  teacherId String?  // Link ke Guru (opsional, hanya untuk role guru)
+  studentId String?  // Link ke Siswa (opsional, hanya untuk role siswa/wali_murid)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  // Relations
+  guru      Guru?    @relation(fields: [teacherId], references: [id])
+  siswa     Siswa?   @relation(fields: [studentId], references: [id])
 }
 
 model Guru {
@@ -61,6 +65,7 @@ model Guru {
   jadwal      Jadwal[]
   kelasWali   Kelas[]       @relation("WaliKelas")
   absensiGuru AbsensiGuru[]
+  users       User[]
 }
 
 model Siswa {
@@ -82,6 +87,7 @@ model Siswa {
   poinSikap      PoinSikap[]     @relation("PoinSikapSiswa")
   pembayaran     Pembayaran[]    @relation("PembayaranSiswa")
   nilai          Nilai[]
+  users          User[]
 }
 
 model Kelas {
@@ -282,4 +288,11 @@ model SystemHeartbeat {
   triggeredBy String   // nama user admin atau 'CRON_WORKER'
   createdAt   DateTime @default(now())
   note        String?
+}
+
+model KelompokMapel {
+  id        String   @id @default(uuid())
+  nama      String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }

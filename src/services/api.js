@@ -108,37 +108,51 @@ export async function loginUser(username, password) {
    TAHUN AJAR
    ============================================================ */
 export async function getAcademicYears() {
-  await simulateNetwork();
+  try {
+    const res = await fetch('/api/tahun-ajar');
+    if (res.ok) return await res.json();
+  } catch (e) { console.error('Failed to get academic years', e); }
   return [...academicYearsList];
 }
 
 export async function addAcademicYear(data) {
-  await simulateNetwork();
-  const newYear = { id: generateId(), ...data, isActive: false };
-  academicYearsList.push(newYear);
-  return { success: true, data: newYear, message: 'Tahun ajar berhasil ditambahkan.' };
+  try {
+    const res = await fetch('/api/tahun-ajar', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data)
+    });
+    if (res.ok) return await res.json();
+  } catch (e) { console.error('Failed to add academic year', e); }
+  return { success: false, error: 'Gagal menghubungi server' };
 }
 
 export async function updateAcademicYear(id, data) {
-  await simulateNetwork();
-  const index = academicYearsList.findIndex(y => y.id === id);
-  if (index !== -1) {
-    academicYearsList[index] = { ...academicYearsList[index], ...data };
-    return { success: true, message: 'Tahun ajar berhasil diperbarui.' };
-  }
-  return { success: false, error: 'Tahun ajar tidak ditemukan.' };
+  try {
+    const res = await fetch(`/api/tahun-ajar/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data)
+    });
+    if (res.ok) return await res.json();
+  } catch (e) { console.error('Failed to update academic year', e); }
+  return { success: false, error: 'Gagal menghubungi server' };
 }
 
 export async function deleteAcademicYear(id) {
-  await simulateNetwork();
-  academicYearsList = academicYearsList.filter(y => y.id !== id);
-  return { success: true, message: 'Tahun ajar berhasil dihapus.' };
+  try {
+    const res = await fetch(`/api/tahun-ajar/${id}`, { method: 'DELETE' });
+    if (res.ok) return await res.json();
+  } catch (e) { console.error('Failed to delete academic year', e); }
+  return { success: false, error: 'Gagal menghubungi server' };
 }
 
 export async function setActiveAcademicYear(id) {
-  await simulateNetwork();
-  academicYearsList = academicYearsList.map(y => ({ ...y, isActive: y.id === id }));
-  return { success: true, message: 'Tahun ajar aktif berhasil diubah.' };
+  try {
+    const res = await fetch(`/api/tahun-ajar/${id}/activate`, { method: 'PUT' });
+    if (res.ok) return await res.json();
+  } catch (e) { console.error('Failed to set active academic year', e); }
+  return { success: false, error: 'Gagal menghubungi server' };
 }
 
 
@@ -146,32 +160,43 @@ export async function setActiveAcademicYear(id) {
    MATA PELAJARAN
    ============================================================ */
 export async function getSubjects() {
-  await simulateNetwork();
+  try {
+    const res = await fetch('/api/mapel');
+    if (res.ok) return await res.json();
+  } catch (e) { console.error('Failed to get subjects', e); }
   return [...subjectsList];
 }
 
 export async function addSubject(data) {
-  await simulateNetwork();
-  const newSubject = { id: generateId(), ...data };
-  subjectsList.push(newSubject);
-  return { success: true, data: newSubject, message: 'Mata pelajaran berhasil ditambahkan.' };
+  try {
+    const res = await fetch('/api/mapel', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data)
+    });
+    if (res.ok) return await res.json();
+  } catch (e) { console.error('Failed to add subject', e); }
+  return { success: false, error: 'Gagal menghubungi server' };
 }
 
 export async function updateSubject(id, data) {
-  await simulateNetwork();
-  const index = subjectsList.findIndex(s => s.id === id);
-  if (index !== -1) {
-    subjectsList[index] = { ...subjectsList[index], ...data };
-    return { success: true, message: 'Mata pelajaran berhasil diperbarui.' };
-  }
-  return { success: false, error: 'Mata pelajaran tidak ditemukan.' };
+  try {
+    const res = await fetch(`/api/mapel/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data)
+    });
+    if (res.ok) return await res.json();
+  } catch (e) { console.error('Failed to update subject', e); }
+  return { success: false, error: 'Gagal menghubungi server' };
 }
 
 export async function deleteSubject(id) {
-  await simulateNetwork();
-  subjectsList = subjectsList.filter(s => s.id !== id);
-  subjectTeachersList = subjectTeachersList.filter(st => st.mapelId !== id);
-  return { success: true, message: 'Mata pelajaran berhasil dihapus.' };
+  try {
+    const res = await fetch(`/api/mapel/${id}`, { method: 'DELETE' });
+    if (res.ok) return await res.json();
+  } catch (e) { console.error('Failed to delete subject', e); }
+  return { success: false, error: 'Gagal menghubungi server' };
 }
 
 
@@ -180,40 +205,43 @@ export async function deleteSubject(id) {
    ============================================================ */
 
 export async function getSubjectGroups() {
-  await simulateNetwork();
+  try {
+    const res = await fetch('/api/mapel/kelompok');
+    if (res.ok) return await res.json();
+  } catch (e) { console.error('Failed to get subject groups', e); }
   return [...subjectGroupsList];
 }
 
 export async function addSubjectGroup(name) {
-  await simulateNetwork();
-  if (!subjectGroupsList.includes(name)) {
-    subjectGroupsList.push(name);
-    return { success: true, message: 'Kelompok berhasil ditambahkan.' };
-  }
-  return { success: false, error: 'Kelompok sudah ada.' };
+  try {
+    const res = await fetch('/api/mapel/kelompok', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name })
+    });
+    if (res.ok) return await res.json();
+  } catch (e) { console.error('Failed to add subject group', e); }
+  return { success: false, error: 'Gagal menghubungi server' };
 }
 
 export async function updateSubjectGroup(oldName, newName) {
-  await simulateNetwork();
-  const index = subjectGroupsList.indexOf(oldName);
-  if (index !== -1) {
-    if (subjectGroupsList.includes(newName) && oldName !== newName) {
-        return { success: false, error: 'Nama kelompok sudah digunakan.' };
-    }
-    subjectGroupsList[index] = newName;
-    // Update existing subjects with the new group name
-    subjectsList = subjectsList.map(s => 
-      s.kelompok === oldName ? { ...s, kelompok: newName } : s
-    );
-    return { success: true, message: 'Kelompok berhasil diperbarui.' };
-  }
-  return { success: false, error: 'Kelompok tidak ditemukan.' };
+  try {
+    const res = await fetch(`/api/mapel/kelompok/${encodeURIComponent(oldName)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ newName })
+    });
+    if (res.ok) return await res.json();
+  } catch (e) { console.error('Failed to update subject group', e); }
+  return { success: false, error: 'Gagal menghubungi server' };
 }
 
 export async function deleteSubjectGroup(name) {
-  await simulateNetwork();
-  subjectGroupsList = subjectGroupsList.filter(g => g !== name);
-  return { success: true, message: 'Kelompok berhasil dihapus.' };
+  try {
+    const res = await fetch(`/api/mapel/kelompok/${encodeURIComponent(name)}`, { method: 'DELETE' });
+    if (res.ok) return await res.json();
+  } catch (e) { console.error('Failed to delete subject group', e); }
+  return { success: false, error: 'Gagal menghubungi server' };
 }
 
 
@@ -302,82 +330,57 @@ export async function deleteDutySchedule(id) {
    STUDENTS (CRUD Master Data Siswa)
    ============================================================ */
 export async function getStudents(classFilter) {
-  await simulateNetwork();
-  if (classFilter) {
-    return studentsList.filter(s => s.class === classFilter);
-  }
+  try {
+    const url = classFilter ? `/api/siswa?kelas=${encodeURIComponent(classFilter)}` : '/api/siswa';
+    const res = await fetch(url);
+    if (res.ok) return await res.json();
+  } catch (e) { console.error('Failed to get students', e); }
+  if (classFilter) return studentsList.filter(s => s.class === classFilter);
   return [...studentsList];
 }
 
 export async function addStudent(studentData) {
-  await simulateNetwork();
-  const newStudent = {
-    id: generateId(),
-    nis: studentData.nis,
-    nisn: studentData.nisn || '-',
-    name: studentData.name,
-    class: studentData.class,
-    gender: studentData.gender,
-    phone_parent: studentData.phone_parent || '-',
-    alamat: studentData.alamat || '-',
-    sekolah_asal: studentData.sekolah_asal || '-',
-  };
-  studentsList.unshift(newStudent);
-  return { success: true, student: newStudent, message: 'Siswa berhasil ditambahkan.' };
+  try {
+    const res = await fetch('/api/siswa', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(studentData)
+    });
+    if (res.ok) return await res.json();
+  } catch (e) { console.error('Failed to add student', e); }
+  return { success: false, error: 'Gagal menghubungi server' };
 }
 
 export async function importStudents(dataArray) {
-  await simulateNetwork();
-  
-  if (!Array.isArray(dataArray) || dataArray.length === 0) {
-    return { success: false, error: 'Data kosong atau format tidak valid.' };
-  }
-
-  let successCount = 0;
-  
-  dataArray.forEach(studentData => {
-    /* Skip jika NIS atau Nama kosong */
-    if (!studentData.nis || !studentData.name) return;
-
-    /* Cek apakah NIS sudah ada untuk mencegah duplikasi */
-    const exists = studentsList.find(s => s.nis === String(studentData.nis));
-    if (!exists) {
-      const newStudent = {
-        id: generateId(),
-        nis: String(studentData.nis),
-        nisn: studentData.nisn ? String(studentData.nisn) : '-',
-        name: studentData.name,
-        class: studentData.class || '-',
-        gender: studentData.gender || 'L',
-        phone_parent: studentData.phone_parent ? String(studentData.phone_parent) : '-',
-        alamat: studentData.alamat || '-',
-        sekolah_asal: studentData.sekolah_asal || '-',
-      };
-      studentsList.unshift(newStudent);
-      successCount++;
-    }
-  });
-
-  return { 
-    success: true, 
-    message: `${successCount} data siswa berhasil diimpor.` 
-  };
+  try {
+    const res = await fetch('/api/siswa/import', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ data: dataArray })
+    });
+    if (res.ok) return await res.json();
+  } catch (e) { console.error('Failed to import students', e); }
+  return { success: false, error: 'Gagal menghubungi server' };
 }
 
 export async function updateStudent(id, studentData) {
-  await simulateNetwork();
-  const index = studentsList.findIndex(s => s.id === id);
-  if (index !== -1) {
-    studentsList[index] = { ...studentsList[index], ...studentData };
-    return { success: true, message: 'Data siswa berhasil diperbarui.' };
-  }
-  return { success: false, error: 'Siswa tidak ditemukan.' };
+  try {
+    const res = await fetch(`/api/siswa/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(studentData)
+    });
+    if (res.ok) return await res.json();
+  } catch (e) { console.error('Failed to update student', e); }
+  return { success: false, error: 'Gagal menghubungi server' };
 }
 
 export async function deleteStudent(id) {
-  await simulateNetwork();
-  studentsList = studentsList.filter(s => s.id !== id);
-  return { success: true, message: 'Siswa berhasil dihapus.' };
+  try {
+    const res = await fetch(`/api/siswa/${id}`, { method: 'DELETE' });
+    if (res.ok) return await res.json();
+  } catch (e) { console.error('Failed to delete student', e); }
+  return { success: false, error: 'Gagal menghubungi server' };
 }
 
 
@@ -385,31 +388,43 @@ export async function deleteStudent(id) {
    TEACHERS (CRUD)
    ============================================================ */
 export async function getTeachers() {
-  await simulateNetwork();
+  try {
+    const res = await fetch('/api/guru');
+    if (res.ok) return await res.json();
+  } catch (e) { console.error('Failed to get teachers', e); }
   return [...teachersList];
 }
 
 export async function addTeacher(data) {
-  await simulateNetwork();
-  const newTeacher = { id: generateId(), ...data, role: 'guru' };
-  teachersList.push(newTeacher);
-  return { success: true, data: newTeacher, message: 'Guru berhasil ditambahkan.' };
+  try {
+    const res = await fetch('/api/guru', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data)
+    });
+    if (res.ok) return await res.json();
+  } catch (e) { console.error('Failed to add teacher', e); }
+  return { success: false, error: 'Gagal menghubungi server' };
 }
 
 export async function updateTeacher(id, data) {
-  await simulateNetwork();
-  const index = teachersList.findIndex(t => t.id === id);
-  if (index !== -1) {
-    teachersList[index] = { ...teachersList[index], ...data };
-    return { success: true, message: 'Data guru berhasil diperbarui.' };
-  }
-  return { success: false, error: 'Guru tidak ditemukan.' };
+  try {
+    const res = await fetch(`/api/guru/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data)
+    });
+    if (res.ok) return await res.json();
+  } catch (e) { console.error('Failed to update teacher', e); }
+  return { success: false, error: 'Gagal menghubungi server' };
 }
 
 export async function deleteTeacher(id) {
-  await simulateNetwork();
-  teachersList = teachersList.filter(t => t.id !== id);
-  return { success: true, message: 'Guru berhasil dihapus.' };
+  try {
+    const res = await fetch(`/api/guru/${id}`, { method: 'DELETE' });
+    if (res.ok) return await res.json();
+  } catch (e) { console.error('Failed to delete teacher', e); }
+  return { success: false, error: 'Gagal menghubungi server' };
 }
 
 
@@ -549,31 +564,43 @@ export async function submitManualTeacherAttendance(data) {
    CLASSES
    ============================================================ */
 export async function getClasses() {
-  await simulateNetwork();
+  try {
+    const res = await fetch('/api/kelas');
+    if (res.ok) return await res.json();
+  } catch (e) { console.error('Failed to get classes', e); }
   return [...classesList];
 }
 
 export async function addClass(data) {
-  await simulateNetwork();
-  const newClass = { id: generateId(), ...data };
-  classesList.push(newClass);
-  return { success: true, data: newClass, message: 'Kelas berhasil ditambahkan.' };
+  try {
+    const res = await fetch('/api/kelas', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data)
+    });
+    if (res.ok) return await res.json();
+  } catch (e) { console.error('Failed to add class', e); }
+  return { success: false, error: 'Gagal menghubungi server' };
 }
 
 export async function updateClass(id, data) {
-  await simulateNetwork();
-  const index = classesList.findIndex(c => c.id === id);
-  if (index !== -1) {
-    classesList[index] = { ...classesList[index], ...data };
-    return { success: true, message: 'Kelas berhasil diperbarui.' };
-  }
-  return { success: false, error: 'Kelas tidak ditemukan.' };
+  try {
+    const res = await fetch(`/api/kelas/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data)
+    });
+    if (res.ok) return await res.json();
+  } catch (e) { console.error('Failed to update class', e); }
+  return { success: false, error: 'Gagal menghubungi server' };
 }
 
 export async function deleteClass(id) {
-  await simulateNetwork();
-  classesList = classesList.filter(c => c.id !== id);
-  return { success: true, message: 'Kelas berhasil dihapus.' };
+  try {
+    const res = await fetch(`/api/kelas/${id}`, { method: 'DELETE' });
+    if (res.ok) return await res.json();
+  } catch (e) { console.error('Failed to delete class', e); }
+  return { success: false, error: 'Gagal menghubungi server' };
 }
 
 
