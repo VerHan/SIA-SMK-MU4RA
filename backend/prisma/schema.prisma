@@ -33,6 +33,7 @@ model TahunAjar {
   poinSikap     PoinSikap[]
   pembayaran    Pembayaran[]
   nilai         Nilai[]
+  absensiMapel  AbsensiMapel[]
 }
 
 model User {
@@ -62,10 +63,11 @@ model Guru {
   updatedAt   DateTime @updatedAt
   
   // Relations
-  jadwal      Jadwal[]
-  kelasWali   Kelas[]       @relation("WaliKelas")
-  absensiGuru AbsensiGuru[]
-  users       User[]
+  jadwal       Jadwal[]
+  kelasWali    Kelas[]       @relation("WaliKelas")
+  absensiGuru  AbsensiGuru[]
+  absensiMapel AbsensiMapel[]
+  users        User[]
 }
 
 model Siswa {
@@ -87,6 +89,7 @@ model Siswa {
   poinSikap      PoinSikap[]     @relation("PoinSikapSiswa")
   pembayaran     Pembayaran[]    @relation("PembayaranSiswa")
   nilai          Nilai[]
+  absensiMapel   AbsensiMapel[]
   users          User[]
 }
 
@@ -112,8 +115,9 @@ model MataPelajaran {
   kelompok String?  // Normatif, Adaptif, Produktif
   
   // Relations
-  jadwal   Jadwal[]
-  nilai    Nilai[]
+  jadwal       Jadwal[]
+  nilai        Nilai[]
+  absensiMapel AbsensiMapel[]
 }
 
 model KalenderAkademik {
@@ -295,4 +299,25 @@ model KelompokMapel {
   nama      String   @unique
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+}
+
+model AbsensiMapel {
+  id          String   @id @default(uuid())
+  studentId   String
+  mapelId     String
+  guruId      String
+  kelasName   String   // Nama kelas untuk query cepat
+  tahunAjarId String?
+  date        DateTime @db.Date
+  jamKe       Int      // Jam pelajaran ke berapa
+  status      String   // hadir, izin, sakit, alpha
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  student     Siswa         @relation(fields: [studentId], references: [id])
+  mapel       MataPelajaran @relation(fields: [mapelId], references: [id])
+  guru        Guru          @relation(fields: [guruId], references: [id])
+  tahunAjar   TahunAjar?    @relation(fields: [tahunAjarId], references: [id])
+
+  @@unique([studentId, mapelId, date, jamKe])
 }

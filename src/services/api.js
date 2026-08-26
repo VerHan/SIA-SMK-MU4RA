@@ -695,6 +695,16 @@ export async function saveAttendance(records) {
 }
 
 export async function getSubjectAttendance(classFilter, dateFilter, subjectFilter, monthFilter) {
+  try {
+    const params = new URLSearchParams();
+    if (classFilter) params.set('kelas', classFilter);
+    if (dateFilter) params.set('date', dateFilter);
+    if (subjectFilter) params.set('mapel', subjectFilter);
+    if (monthFilter) params.set('month', monthFilter);
+    const res = await fetch(`/api/absensi-mapel?${params.toString()}`);
+    if (res.ok) return await res.json();
+  } catch (e) { console.error('Failed to get subject attendance', e); }
+  // Fallback ke mock
   await simulateNetwork();
   let data = [...subjectAttendanceList];
   if (classFilter) data = data.filter(a => a.class === classFilter);
@@ -705,21 +715,25 @@ export async function getSubjectAttendance(classFilter, dateFilter, subjectFilte
 }
 
 export async function saveSubjectAttendance(records) {
-  await simulateNetwork();
-  records.forEach(record => {
-    const existingIndex = subjectAttendanceList.findIndex(
-      a => a.studentId === record.studentId && 
-           a.date === record.date && 
-           a.subject === record.subject && 
-           a.jamKe === record.jamKe
-    );
-    if (existingIndex !== -1) {
-      subjectAttendanceList[existingIndex] = { ...subjectAttendanceList[existingIndex], ...record };
-    } else {
-      subjectAttendanceList.push({ id: generateId(), ...record });
-    }
-  });
-  return { success: true, message: 'Absensi mapel berhasil disimpan.' };
+  try {
+    const res = await fetch('/api/absensi-mapel', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ records })
+    });
+    if (res.ok) return await res.json();
+  } catch (e) { console.error('Failed to save subject attendance', e); }
+  return { success: false, error: 'Gagal menghubungi server' };
+}
+
+export async function getSubjectAttendanceRekap(kelas, month, mapelId) {
+  try {
+    const params = new URLSearchParams({ kelas, month });
+    if (mapelId) params.set('mapel', mapelId);
+    const res = await fetch(`/api/absensi-mapel/rekap?${params.toString()}`);
+    if (res.ok) return await res.json();
+  } catch (e) { console.error('Failed to get subject attendance rekap', e); }
+  return { success: false, error: 'Gagal menghubungi server' };
 }
 
 export async function getPrayerAttendance(classFilter) {

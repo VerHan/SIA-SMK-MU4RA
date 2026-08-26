@@ -636,5 +636,174 @@ app.put('/api/tahun-ajar/:id/activate', async (req, res) => {
   }
 });
 
+// ==========================================
+// 9. ABSENSI MAPEL (Per Mata Pelajaran)
+// ==========================================
+
+// POST — Guru menyimpan absensi murid per jam pelajaran
+app.post('/api/absensi-mapel', async (req, res) => {
+  try {
+    const { records } = req.body;
+    if (!Array.isArray(records) || records.length === 0) {
+      return res.json({ success: false, error: 'Data absensi kosong' });
+    }
+
+    const activeTa = await prisma.tahunAjar.findFirst({ where: { isActive: true } });
+
+    for (const record of records) {
+      await prisma.absensiMapel.upsert({
+        where: {
+          studentId_mapelId_date_jamKe: {
+            studentId: record.studentId,
+            mapelId: record.mapelId || record.subjectId,
+            date: new Date(record.date),
+            jamKe: record.jamKe
+          }
+        },
+        update: {
+          status: record.status,
+          guruId: record.guruId || record.teacherId,
+          kelasName: record.class || record.kelasName || '-'
+        },
+        create: {
+          studentId: record.studentId,
+          mapelId: record.mapelId || record.subjectId,
+          guruId: record.guruId || record.teacherId,
+          kelasName: record.class || record.kelasName || '-',
+          tahunAjarId: activeTa?.id || null,
+          date: new Date(record.date),
+          jamKe: record.jamKe,
+          status: record.status
+        }
+      });
+    }
+
+    res.json({ success: true, message: 'Absensi mapel berhasil disimpan.' });
+  } catch (err) {
+    console.error('POST /api/absensi-mapel error:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// GET — Ambil data absensi mapel (filter: kelas, mapel, tanggal, bulan)
+app.get('/api/absensi-mapel', async (req, res) => {
+  try {
+    const { kelas, mapel, date, month } = req.query;
+    let where = {};
+    if (kelas) where.kelasName = kelas;
+    if (mapel) where.mapelId = mapel;
+    if (date) where.date = new Date(date);
+    if (month) {
+      const [y, m] = month.split('-');
+      const start = new Date(`${y}-${m}-01`);
+      const end = new Date(start);
+      end.setMonth(end.getMonth() + 1);
+      where.date = { gte: start, lt: end };
+    }
+
+    const data = await prisma.absensiMapel.findMany({
+      where,
+      include: {
+        student: true,
+        mapel: true,
+        guru: true
+      },
+      orderBy: [{ date: 'desc' }, { jamKe: 'asc' }]
+    });
+
+    res.json(data.map(a => ({
+      id: a.id,
+      studentId: a.studentId,
+      studentName: a.student.name,
+      mapelId: a.mapelId,
+      subject: a.mapel.nama,
+      guruId: a.guruId,
+      teacherName: a.guru.name,
+      class: a.kelasName,
+      date: a.date.toISOString().split('T')[0],
+      jamKe: a.jamKe,
+      status: a.status
+    })));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET — Rekap bulanan per kelas per mapel
+// Persentase dihitung berdasarkan berapa kali guru benar-benar mengabsen
+app.get('/api/absensi-mapel/rekap', async (req, res) => {
+  try {
+    const { kelas, mapel, month } = req.query;
+    if (!kelas || !month) {
+      return res.json({ success: false, error: 'Parameter kelas dan month wajib' });
+    }
+
+    const [y, m] = month.split('-');
+    const start = new Date(`${y}-${m}-01`);
+    const end = new Date(start);
+    end.setMonth(end.getMonth() + 1);
+
+    let where = {
+      kelasName: kelas,
+      date: { gte: start, lt: end }
+    };
+    if (mapel) where.mapelId = mapel;
+
+    const data = await prisma.absensiMapel.findMany({
+      where,
+      include: { student: true, mapel: true }
+    });
+
+    // Hitung total sesi unik (tanggal + jamKe + mapelId)
+    const sesiSet = new Set();
+    data.forEach(a => sesiSet.add(`${a.date.toISOString().split('T')[0]}_${a.jamKe}_${a.mapelId}`));
+    const totalSesi = sesiSet.size;
+
+    // Hitung per siswa
+    const studentMap = {};
+    data.forEach(a => {
+      if (!studentMap[a.studentId]) {
+        studentMap[a.studentId] = {
+          studentId: a.studentId,
+          studentName: a.student.name,
+          class: a.kelasName,
+          hadir: 0, izin: 0, sakit: 0, alpha: 0
+        };
+      }
+      const s = studentMap[a.studentId];
+      if (a.status === 'hadir') s.hadir++;
+      else if (a.status === 'izin') s.izin++;
+      else if (a.status === 'sakit') s.sakit++;
+      else if (a.status === 'alpha') s.alpha++;
+    });
+
+    // Hitung persentase per mapel jika filter mapel aktif
+    // Jika tidak ada filter mapel, hitung total sesi per siswa
+    const rekap = Object.values(studentMap).map(s => {
+      const totalPerSiswa = s.hadir + s.izin + s.sakit + s.alpha;
+      const persen = totalPerSiswa > 0 ? Math.round((s.hadir / totalPerSiswa) * 100) : 0;
+      return {
+        ...s,
+        totalSesi: totalPerSiswa,
+        persentase: persen
+      };
+    });
+
+    // Sort by name
+    rekap.sort((a, b) => a.studentName.localeCompare(b.studentName));
+
+    res.json({
+      success: true,
+      totalSesiGuru: totalSesi,
+      kelas,
+      bulan: month,
+      mapelId: mapel || 'semua',
+      rekap
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 // Since this file uses ES modules, we export the app as default
 export default app;
