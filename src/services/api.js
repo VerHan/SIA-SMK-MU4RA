@@ -534,6 +534,12 @@ export async function submitTeacherAttendance({ teacherName, type, distanceMeter
    ABSENSI GURU (REKAP ADMIN: GPS + MANUAL)
    ============================================================ */
 export async function getTeacherAttendanceRecap(dateFilter) {
+  try {
+    const url = dateFilter ? `/api/guru/absen?date=${dateFilter}` : '/api/guru/absen';
+    const res = await fetch(url);
+    if (res.ok) return await res.json();
+  } catch (e) { console.error('Failed to get teacher attendance recap', e); }
+  // Fallback
   await simulateNetwork();
   let data = [...teacherAttendanceList];
   if (dateFilter) data = data.filter(a => a.tanggal === dateFilter);
@@ -541,22 +547,15 @@ export async function getTeacherAttendanceRecap(dateFilter) {
 }
 
 export async function submitManualTeacherAttendance(data) {
-  await simulateNetwork();
-  const guru = teachersList.find(g => g.id === data.guruId);
-  const newRecord = {
-    id: generateId(),
-    guruId: data.guruId,
-    guruName: guru?.name || '-',
-    tanggal: data.tanggal,
-    status: data.status,
-    sumber: 'manual',
-    jamMasuk: data.jamMasuk || null,
-    jamPulang: data.jamPulang || null,
-    jarakMeter: null,
-    keterangan: data.keterangan || '',
-  };
-  teacherAttendanceList.unshift(newRecord);
-  return { success: true, message: 'Absensi guru berhasil dicatat.' };
+  try {
+    const res = await fetch('/api/guru/absen/manual', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data)
+    });
+    if (res.ok) return await res.json();
+  } catch (e) { console.error('Failed to submit manual teacher attendance', e); }
+  return { success: false, error: 'Gagal menghubungi server' };
 }
 
 

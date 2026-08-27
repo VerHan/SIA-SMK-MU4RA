@@ -131,19 +131,28 @@ app.get('/api/guru/absen', async (req, res) => {
     }
     const absensi = await prisma.absensiGuru.findMany({
       where,
-      include: { guru: true }
+      include: { guru: true },
+      orderBy: { createdAt: 'desc' }
     });
     
     const mapped = absensi.map(a => ({
       id: a.id,
       teacherId: a.guruId,
-      teacherName: a.guru.name,
+      guruId: a.guruId,
+      guruName: a.guru?.name || '-',
+      teacherName: a.guru?.name || '-',
       date: a.tanggal.toISOString().split('T')[0],
+      tanggal: a.tanggal.toISOString().split('T')[0],
       status: a.status,
       timeIn: a.jamMasuk,
+      jamMasuk: a.jamMasuk,
       timeOut: a.jamPulang,
+      jamPulang: a.jamPulang,
       source: a.sumber,
-      distanceMeters: a.jarakMeter
+      sumber: a.sumber,
+      distanceMeters: a.jarakMeter,
+      jarakMeter: a.jarakMeter,
+      keterangan: a.keterangan || ''
     }));
     res.json(mapped);
   } catch (err) {
@@ -151,7 +160,7 @@ app.get('/api/guru/absen', async (req, res) => {
   }
 });
 
-// 3. Guru Absensi (POST)
+// 3. Guru Absensi (POST GPS)
 app.post('/api/guru/absen', async (req, res) => {
   const { teacherName, type, distanceMeters, isWithinGeofence } = req.body;
   try {
@@ -198,6 +207,50 @@ app.post('/api/guru/absen', async (req, res) => {
       });
       return res.json({ success: true, message: 'Berhasil Absen Pulang!' });
     }
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// 3b. Guru Absensi (POST Manual Admin)
+app.post('/api/guru/absen/manual', async (req, res) => {
+  const { guruId, tanggal, status, jamMasuk, jamPulang, keterangan } = req.body;
+  try {
+    const guru = await prisma.guru.findUnique({ where: { id: guruId } });
+    if (!guru) return res.status(404).json({ success: false, message: 'Guru tidak ditemukan' });
+
+    const targetDate = new Date(`${tanggal}T00:00:00.000Z`);
+
+    const existing = await prisma.absensiGuru.findFirst({
+      where: { guruId, tanggal: targetDate }
+    });
+
+    if (existing) {
+      await prisma.absensiGuru.update({
+        where: { id: existing.id },
+        data: {
+          status: status || 'hadir',
+          sumber: 'manual',
+          jamMasuk: jamMasuk || existing.jamMasuk,
+          jamPulang: jamPulang || existing.jamPulang,
+          keterangan: keterangan || ''
+        }
+      });
+    } else {
+      await prisma.absensiGuru.create({
+        data: {
+          guruId,
+          tanggal: targetDate,
+          status: status || 'hadir',
+          sumber: 'manual',
+          jamMasuk: jamMasuk || null,
+          jamPulang: jamPulang || null,
+          keterangan: keterangan || ''
+        }
+      });
+    }
+
+    res.json({ success: true, message: 'Absensi guru berhasil dicatat.' });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }

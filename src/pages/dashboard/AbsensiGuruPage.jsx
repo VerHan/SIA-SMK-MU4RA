@@ -19,7 +19,7 @@ export default function AbsensiGuruPage() {
   const [teachers, setTeachers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
-  const [dateFilter, setDateFilter] = useState('2024-07-22');
+  const [dateFilter, setDateFilter] = useState(() => new Date().toISOString().split('T')[0]);
   const [form, setForm] = useState({ guruId: '', tanggal: '', status: 'hadir', jamMasuk: '', jamPulang: '', keterangan: '' });
 
   const fetchData = async () => {
