@@ -27,7 +27,7 @@ export default function MataPelajaranPage() {
   const [showModal, setShowModal] = useState(false);
   const [showGroupModal, setShowGroupModal] = useState(false);
   const [editData, setEditData] = useState(null);
-  const [form, setForm] = useState({ kode: '', nama: '', kelompok: 'Normatif' });
+  const [form, setForm] = useState({ kode: '', nama: '', kelompok: '' });
   const [filterGroup, setFilterGroup] = useState('');
   
   // Group Management State
@@ -53,7 +53,7 @@ export default function MataPelajaranPage() {
     }
     setShowModal(false);
     setEditData(null);
-    setForm({ kode: '', nama: '', kelompok: 'Normatif' });
+    setForm({ kode: '', nama: '', kelompok: subjectGroups[0] || '' });
     fetchData();
   };
 
@@ -113,7 +113,7 @@ export default function MataPelajaranPage() {
             Kelola daftar mata pelajaran sekolah
           </p>
         </div>
-        <Button onClick={() => { setEditData(null); setForm({ kode: '', nama: '', kelompok: 'Normatif' }); setShowModal(true); }}>
+        <Button onClick={() => { setEditData(null); setForm({ kode: '', nama: '', kelompok: subjectGroups[0] || '' }); setShowModal(true); }}>
           + Tambah Mapel
         </Button>
       </div>

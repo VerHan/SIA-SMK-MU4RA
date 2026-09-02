@@ -38,11 +38,11 @@ export default function DataSiswaPage() {
 
   /* Form state */
   const [formData, setFormData] = useState({
-    nis: '',
-    nisn: '',
+    nomor: '',
     name: '',
     class: 'X TKJ 1',
     gender: 'L',
+    phone: '',
     phone_parent: '',
     alamat: '',
     sekolah_asal: '',
@@ -63,8 +63,8 @@ export default function DataSiswaPage() {
 
   const handleAddSubmit = async (e) => {
     e.preventDefault();
-    if (!formData.nis || !formData.name) {
-      setToast({ type: 'error', message: 'NIS dan Nama Siswa wajib diisi.' });
+    if (!formData.nomor || !formData.name) {
+      setToast({ type: 'error', message: 'Nomor dan Nama Siswa wajib diisi.' });
       return;
     }
 
@@ -75,7 +75,7 @@ export default function DataSiswaPage() {
     if (res.success) {
       setToast({ type: 'success', message: res.message });
       setIsModalOpen(false);
-      setFormData({ nis: '', nisn: '', name: '', class: 'X TKJ 1', gender: 'L', phone_parent: '', alamat: '', sekolah_asal: '' });
+      setFormData({ nomor: '', name: '', class: 'X TKJ 1', gender: 'L', phone: '', phone_parent: '', alamat: '', sekolah_asal: '' });
       loadData();
     }
   };
@@ -94,12 +94,12 @@ export default function DataSiswaPage() {
   const handleExport = () => {
     /* Buat mapping data khusus untuk diekspor */
     let exportData = students.map(s => ({
-      'NIS': s.nis,
-      'NISN': s.nisn,
+      'Nomor': s.nomor,
       'Nama Lengkap': s.name,
       'Kelas': s.class,
       'L/P': s.gender,
-      'HP Ortu': s.phone_parent,
+      'No WA Sendiri': s.phone || '',
+      'No WA Ortu': s.phone_parent || '',
       'Alamat': s.alamat || '',
       'Sekolah Asal': s.sekolah_asal || ''
     }));
@@ -107,12 +107,12 @@ export default function DataSiswaPage() {
     /* Jika data kosong, sediakan 1 row dummy sebagai template */
     if (exportData.length === 0) {
       exportData = [{
-        'NIS': '2024001',
-        'NISN': '0012345601',
+        'Nomor': '2024001',
         'Nama Lengkap': 'John Doe',
         'Kelas': 'X TKJ 1',
         'L/P': 'L',
-        'HP Ortu': '0812345678',
+        'No WA Sendiri': '0812345678',
+        'No WA Ortu': '0812345678',
         'Alamat': 'Jl. Merdeka',
         'Sekolah Asal': 'SMPN 1'
       }];
@@ -139,12 +139,12 @@ export default function DataSiswaPage() {
 
         /* Map data Excel ke schema internal */
         const mappedData = data.map(row => ({
-          nis: row['NIS'],
-          nisn: row['NISN'],
+          nomor: row['Nomor']?.toString() || row['NIS']?.toString(),
           name: row['Nama Lengkap'],
           class: row['Kelas'],
           gender: row['L/P'],
-          phone_parent: row['HP Ortu'],
+          phone: row['No WA Sendiri']?.toString(),
+          phone_parent: row['No WA Ortu']?.toString() || row['HP Ortu']?.toString(),
           alamat: row['Alamat'],
           sekolah_asal: row['Sekolah Asal']
         }));
@@ -174,8 +174,8 @@ export default function DataSiswaPage() {
     const matchGrade = selectedGrade === 'Semua' || sGrade === selectedGrade;
     const matchClass = selectedClass === 'Semua' || s.class === selectedClass;
     const matchSearch = s.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                        s.nis.includes(searchQuery);
-    return matchGrade && matchClass && matchSearch;
+                        (s.nomor && s.nomor.includes(searchQuery));
+    return matchSearch && matchGrade && matchClass;
   });
 
   const availableClasses = classes.filter(c => {
@@ -185,11 +185,12 @@ export default function DataSiswaPage() {
 
   const columns = [
     { key: 'no', label: 'No', width: '40px', render: (_, row, i) => i + 1 },
-    { key: 'nis', label: 'NIS / NISN', render: (val, row) => <span><strong>{row.nis}</strong> <span style={{ color: 'var(--color-text-muted)', fontSize: 'var(--font-size-xs)' }}>/ {row.nisn}</span></span> },
+    { key: 'nomor', label: 'Nomor', render: (val, row) => <span><strong>{row.nomor}</strong></span> },
     { key: 'name', label: 'Nama Lengkap', cellStyle: { fontWeight: 'var(--font-weight-semibold)' } },
     { key: 'class', label: 'Kelas', width: '90px', render: (val) => <Badge variant="primary">{val}</Badge> },
     { key: 'gender', label: 'L/P', width: '90px', render: (val) => <Badge variant={val === 'L' ? 'info' : 'warning'}>{val === 'L' ? 'Laki-laki' : 'Perempuan'}</Badge> },
-    { key: 'phone_parent', label: 'HP Ortu', width: '120px' },
+    { key: 'phone', label: 'WA Sendiri', width: '120px' },
+    { key: 'phone_parent', label: 'WA Ortu', width: '120px' },
     { key: 'alamat', label: 'Alamat', render: (val) => <span style={{ fontSize: '12px' }}>{val || '-'}</span> },
     { key: 'sekolah_asal', label: 'Asal Sekolah', render: (val) => <span style={{ fontSize: '12px' }}>{val || '-'}</span> },
     {
@@ -274,11 +275,11 @@ export default function DataSiswaPage() {
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 'var(--space-4)', alignItems: 'center' }}>
           <div>
             <label style={{ display: 'block', fontSize: 'var(--font-size-sm)', fontWeight: 'var(--font-weight-medium)', marginBottom: 'var(--space-1)' }}>
-              Cari Nama / NIS
+              Cari Nama / Nomor
             </label>
             <input
               type="text"
-              placeholder="Ketik nama atau NIS..."
+              placeholder="Ketik nama atau nomor..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               style={{
@@ -328,19 +329,13 @@ export default function DataSiswaPage() {
       {/* Modal Form Tambah Siswa */}
       <Modal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} title="Tambah Data Siswa Baru">
         <form onSubmit={handleAddSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }}>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--space-3)' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 'var(--space-3)' }}>
             <Input
-              label="NIS"
-              value={formData.nis}
-              onChange={(e) => setFormData({ ...formData, nis: e.target.value })}
+              label="Nomor"
+              value={formData.nomor}
+              onChange={(e) => setFormData({ ...formData, nomor: e.target.value })}
               placeholder="20240011"
               required
-            />
-            <Input
-              label="NISN"
-              value={formData.nisn}
-              onChange={(e) => setFormData({ ...formData, nisn: e.target.value })}
-              placeholder="0012345611"
             />
           </div>
           
@@ -389,12 +384,20 @@ export default function DataSiswaPage() {
             </div>
           </div>
 
-          <Input
-            label="No. HP Orang Tua / Wali"
-            value={formData.phone_parent}
-            onChange={(e) => setFormData({ ...formData, phone_parent: e.target.value })}
-            placeholder="Contoh: 08123456789"
-          />
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--space-3)' }}>
+            <Input
+              label="No. WA Sendiri"
+              value={formData.phone}
+              onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
+              placeholder="Contoh: 08123456789"
+            />
+            <Input
+              label="No. WA Orang Tua / Wali"
+              value={formData.phone_parent}
+              onChange={(e) => setFormData({ ...formData, phone_parent: e.target.value })}
+              placeholder="Contoh: 08123456789"
+            />
+          </div>
 
           <Input
             label="Alamat"

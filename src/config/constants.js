@@ -177,9 +177,9 @@ export const PAYMENT_STATUS = {
   BELUM: 'belum',
 };
 
-export const DAYS = ['Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu'];
+export const DAYS = ['Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat'];
 
-export const SUBJECT_GROUPS = ['Normatif', 'Adaptif', 'Produktif'];
+export const SUBJECT_GROUPS = [];
 
 export const TEACHER_DUTY_TYPES = [
   { value: 'wali_kelas', label: 'Wali Kelas' },

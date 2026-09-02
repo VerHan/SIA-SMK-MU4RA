@@ -72,10 +72,10 @@ model Guru {
 
 model Siswa {
   id           String   @id @default(uuid())
-  nis          String   @unique
-  nisn         String?  @unique
+  nomor        String   @unique
   name         String
   gender       String
+  phone        String?
   phone_parent String?
   alamat       String?
   sekolah_asal String?
