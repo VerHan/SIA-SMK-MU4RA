@@ -25,10 +25,62 @@ function calcDistance(lat1, lon1, lat2, lon2) {
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
-const STATUS_COLORS = {
-  'hadir': { bg: 'rgba(5,150,105,0.15)', border: 'rgba(5,150,105,0.4)', text: '#34D399' },
-  'alpha': { bg: 'rgba(239,68,68,0.15)', border: 'rgba(239,68,68,0.4)', text: '#FCA5A5' },
-};
+function getStatusBadgeConfig(status, hasCheckedIn) {
+  if (!hasCheckedIn) {
+    return {
+      label: 'Belum Absen',
+      icon: '⏳',
+      color: '#D97706',
+      bg: 'rgba(245, 158, 11, 0.08)',
+      border: 'rgba(245, 158, 11, 0.25)',
+    };
+  }
+
+  const s = (status || '').toLowerCase();
+  if (s === 'hadir' || s.includes('hadir') || s.includes('tepat')) {
+    return {
+      label: 'Hadir',
+      icon: '✅',
+      color: '#059669',
+      bg: 'rgba(5, 150, 105, 0.08)',
+      border: 'rgba(5, 150, 105, 0.25)',
+    };
+  }
+  if (s.includes('izin') || s.includes('ijin')) {
+    return {
+      label: 'Izin',
+      icon: '📝',
+      color: '#2563EB',
+      bg: 'rgba(37, 99, 235, 0.08)',
+      border: 'rgba(37, 99, 235, 0.25)',
+    };
+  }
+  if (s.includes('sakit')) {
+    return {
+      label: 'Sakit',
+      icon: '🏥',
+      color: '#EA580C',
+      bg: 'rgba(234, 88, 12, 0.08)',
+      border: 'rgba(234, 88, 12, 0.25)',
+    };
+  }
+  if (s.includes('alpha') || s.includes('alpa')) {
+    return {
+      label: 'Alpha',
+      icon: '❌',
+      color: '#DC2626',
+      bg: 'rgba(220, 38, 38, 0.08)',
+      border: 'rgba(220, 38, 38, 0.25)',
+    };
+  }
+  return {
+    label: status || 'Hadir',
+    icon: '✅',
+    color: '#059669',
+    bg: 'rgba(5, 150, 105, 0.08)',
+    border: 'rgba(5, 150, 105, 0.25)',
+  };
+}
 
 export default function MobileAbsenGPSPage() {
   const { user } = useAuth();
@@ -45,6 +97,9 @@ export default function MobileAbsenGPSPage() {
   /* Baca dari cache lokal terlebih dahulu (0ms delay) */
   const [todayRecord, setTodayRecord] = useState(() => getCachedAttendance(user?.name, today));
   const [permissionStatus, setPermissionStatus] = useState('unknown'); // 'unknown' | 'granted' | 'denied' | 'prompt'
+
+  const hasCheckedIn = Boolean(todayRecord?.timeIn);
+  const statusConfig = getStatusBadgeConfig(todayRecord?.status, hasCheckedIn);
 
   /* Cek status permission GPS saat halaman dimuat */
   useEffect(() => {
@@ -215,84 +270,122 @@ export default function MobileAbsenGPSPage() {
   return (
     <div style={{ padding: '16px 20px', animation: 'fadeInUp 0.4s ease' }}>
       <h2 style={{ fontSize: '20px', fontWeight: 700, color: '#0F172A', margin: '0 0 4px' }}>Absen GPS</h2>
-      <p style={{ fontSize: '13px', color: '#64748B', margin: '0 0 20px' }}>
+      <p style={{ fontSize: '13px', color: '#64748B', margin: '0 0 14px' }}>
         Absensi berbasis geolokasi sekolah
       </p>
 
       {/* Permission Warning */}
       {permissionStatus === 'denied' && (
         <div style={{
-          padding: '16px', borderRadius: '16px', marginBottom: '16px',
+          padding: '14px 16px', borderRadius: '16px', marginBottom: '12px',
           background: 'rgba(239, 68, 68, 0.08)', border: '1px solid rgba(239,68,68,0.2)',
         }}>
-          <p style={{ fontSize: '14px', fontWeight: 600, color: '#DC2626', margin: '0 0 8px' }}>
+          <p style={{ fontSize: '13px', fontWeight: 600, color: '#DC2626', margin: '0 0 6px' }}>
             ⛔ Izin Lokasi Ditolak
           </p>
-          <p style={{ fontSize: '12px', color: '#64748B', margin: '0 0 8px', lineHeight: '1.5' }}>
-            Browser memblokir akses lokasi. Untuk mengaktifkan:
+          <p style={{ fontSize: '12px', color: '#64748B', margin: '0 0 6px', lineHeight: '1.4' }}>
+            Browser memblokir akses lokasi. Silakan izinkan akses lokasi di browser lalu refresh.
           </p>
-          <div style={{ fontSize: '12px', color: '#475569', lineHeight: '1.6' }}>
-            <div><strong>Chrome Android:</strong></div>
-            <div style={{ paddingLeft: '8px', marginBottom: '4px' }}>
-              Tap ikon 🔒 di address bar → Izin → Lokasi → Izinkan
-            </div>
-            <div><strong>Safari iOS:</strong></div>
-            <div style={{ paddingLeft: '8px', marginBottom: '4px' }}>
-              Pengaturan → Safari → Lokasi → Izinkan
-            </div>
-            <div><strong>Lalu refresh halaman ini.</strong></div>
-          </div>
         </div>
       )}
 
-      {/* Status Card */}
-      {todayRecord && (
-        <div style={{
-          padding: '16px', borderRadius: '16px', marginBottom: '16px',
-          background: 'rgba(5, 150, 105, 0.05)', border: '1px solid rgba(5,150,105,0.2)',
-        }}>
-          <p style={{ fontSize: '12px', color: '#64748B', margin: '0 0 4px' }}>Status Hari Ini</p>
-          <p style={{ fontSize: '14px', fontWeight: 600, color: '#059669', margin: 0 }}>
-            ✅ {todayRecord.status}
-          </p>
-          <div style={{ display: 'flex', gap: '16px', marginTop: '8px' }}>
-            <div>
-              <span style={{ fontSize: '11px', color: '#64748B' }}>Masuk</span>
-              <p style={{ fontSize: '14px', fontWeight: 700, color: '#0F172A', margin: 0 }}>{todayRecord.timeIn || '--:--'}</p>
-            </div>
-            <div>
-              <span style={{ fontSize: '11px', color: '#64748B' }}>Pulang</span>
-              <p style={{ fontSize: '14px', fontWeight: 700, color: '#0F172A', margin: 0 }}>{todayRecord.timeOut || '--:--'}</p>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Lokasi */}
+      {/* ── CARD STATUS KEHADIRAN PERMANEN (COMPACT & HEMAT RUANG) ── */}
       <div style={{
-        padding: '20px', borderRadius: '20px', marginBottom: '16px',
-        background: 'rgba(255, 255, 255, 0.8)', border: '1px solid rgba(0,0,0,0.06)',
-        boxShadow: '0 4px 16px rgba(0,0,0,0.03)',
+        padding: '12px 16px',
+        borderRadius: '16px',
+        marginBottom: '12px',
+        background: '#FFFFFF',
+        border: '1px solid rgba(0, 0, 0, 0.07)',
+        boxShadow: '0 2px 10px rgba(0, 0, 0, 0.03)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        gap: '12px',
+      }}>
+        {/* Kiri: Status Kehadiran (Belum Absen / Hadir / Izin / Sakit) */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '3px', minWidth: 0 }}>
+          <span style={{ fontSize: '10px', fontWeight: 600, color: '#64748B', letterSpacing: '0.4px', textTransform: 'uppercase' }}>
+            Status Kehadiran
+          </span>
+          <div style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: '5px',
+            padding: '3px 10px',
+            borderRadius: '20px',
+            background: statusConfig.bg,
+            border: `1px solid ${statusConfig.border}`,
+            width: 'fit-content',
+          }}>
+            <span style={{ fontSize: '11px' }}>{statusConfig.icon}</span>
+            <span style={{ fontSize: '12px', fontWeight: 700, color: statusConfig.color }}>
+              {statusConfig.label}
+            </span>
+          </div>
+        </div>
+
+        {/* Pemisah Vertikal Halus */}
+        <div style={{ width: '1px', height: '34px', background: 'rgba(0, 0, 0, 0.06)' }} />
+
+        {/* Kanan: Jam Masuk & Jam Pulang Berdampingan */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
+          {/* Jam Masuk */}
+          <div style={{ textAlign: 'center', minWidth: '52px' }}>
+            <span style={{ fontSize: '10px', color: '#64748B', display: 'block', marginBottom: '1px' }}>
+              Masuk
+            </span>
+            <span style={{
+              fontSize: '13px',
+              fontWeight: 700,
+              color: todayRecord?.timeIn ? '#059669' : '#94A3B8',
+              fontVariantNumeric: 'tabular-nums',
+            }}>
+              {todayRecord?.timeIn || '--:--'}
+            </span>
+          </div>
+
+          {/* Jam Pulang */}
+          <div style={{ textAlign: 'center', minWidth: '52px' }}>
+            <span style={{ fontSize: '10px', color: '#64748B', display: 'block', marginBottom: '1px' }}>
+              Pulang
+            </span>
+            <span style={{
+              fontSize: '13px',
+              fontWeight: 700,
+              color: todayRecord?.timeOut ? '#D97706' : '#94A3B8',
+              fontVariantNumeric: 'tabular-nums',
+            }}>
+              {todayRecord?.timeOut || '--:--'}
+            </span>
+          </div>
+        </div>
+      </div>
+
+      {/* Lokasi Card (Compact & Rapi) */}
+      <div style={{
+        padding: '16px', borderRadius: '16px', marginBottom: '12px',
+        background: 'rgba(255, 255, 255, 0.85)', border: '1px solid rgba(0,0,0,0.06)',
+        boxShadow: '0 4px 16px rgba(0,0,0,0.02)',
         textAlign: 'center',
       }}>
-        <div style={{ fontSize: '48px', marginBottom: '12px' }}>
+        <div style={{ fontSize: '36px', marginBottom: '6px' }}>
           {coords ? (isWithin ? '✅' : '⚠️') : '📍'}
         </div>
 
         {coords ? (
           <>
-            <p style={{ fontSize: '15px', fontWeight: 600, color: isWithin ? '#059669' : '#D97706', margin: '0 0 4px' }}>
+            <p style={{ fontSize: '14px', fontWeight: 600, color: isWithin ? '#059669' : '#D97706', margin: '0 0 2px' }}>
               {isWithin ? 'Dalam Area Sekolah' : 'Di Luar Area Sekolah'}
             </p>
-            <p style={{ fontSize: '13px', color: '#64748B', margin: '0 0 6px' }}>
+            <p style={{ fontSize: '12px', color: '#64748B', margin: '0 0 4px' }}>
               Jarak: <strong>{distance} m</strong> dari sekolah (radius {schoolGeofence.radiusMeters} m)
             </p>
             <p style={{ fontSize: '11px', color: '#94A3B8', margin: 0 }}>
-              Koordinat Anda: {coords.latitude.toFixed(6)}, {coords.longitude.toFixed(6)}
+              Koordinat: {coords.latitude.toFixed(6)}, {coords.longitude.toFixed(6)}
             </p>
           </>
         ) : (
-          <p style={{ fontSize: '14px', color: '#64748B', margin: 0 }}>
+          <p style={{ fontSize: '13px', color: '#64748B', margin: 0 }}>
             Tekan tombol di bawah untuk mendeteksi lokasi Anda
           </p>
         )}
