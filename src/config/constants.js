@@ -194,3 +194,39 @@ export const TEACHER_ATTENDANCE_STATUS = [
   { value: 'tugas_luar', label: 'Tugas Luar', color: '#8B5CF6' },
   { value: 'alpha', label: 'Alpha', color: '#EF4444' },
 ];
+
+export const JURUSAN_LIST = [
+  {
+    id: 'tkj',
+    shortName: 'TKJ',
+    name: 'Teknik Komputer & Jaringan',
+    description: 'Mempelajari instalasi jaringan komputer, konfigurasi router & server, fiber optik, dan administrasi sistem.',
+    icon: 'monitor',
+    color: '#3B82F6'
+  },
+  {
+    id: 'rpl',
+    shortName: 'RPL',
+    name: 'Rekayasa Perangkat Lunak',
+    description: 'Fokus pada pengembangan aplikasi web, mobile, basis data, dan rekayasa perangkat lunak modern.',
+    icon: 'code-2',
+    color: '#10B981'
+  },
+  {
+    id: 'tbsm',
+    shortName: 'TBSM',
+    name: 'Teknik Bisnis Sepeda Motor',
+    description: 'Kompetensi teknik perawatan, perbaikan mesin sepeda motor berteknologi injeksi, dan manajemen bengkel.',
+    icon: 'wrench',
+    color: '#F59E0B'
+  },
+  {
+    id: 'akl',
+    shortName: 'AKL',
+    name: 'Akuntansi & Keuangan Lembaga',
+    description: 'Pengelolaan siklus akuntansi perusahaan, perbankan syariah/konvensional, perpajakan, dan aplikasi spreadsheet.',
+    icon: 'bar-chart',
+    color: '#8B5CF6'
+  }
+];
+

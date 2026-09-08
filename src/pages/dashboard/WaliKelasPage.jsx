@@ -23,6 +23,7 @@ export default function WaliKelasPage() {
   const [formData, setFormData] = useState({
     name: '',
     grade: 'X',
+    major: 'TKJ',
     teacherId: '',
     totalStudents: 0
   });
@@ -30,8 +31,8 @@ export default function WaliKelasPage() {
   const loadData = async () => {
     setLoading(true);
     const [kelasData, guruData] = await Promise.all([getClasses(), getTeachers()]);
-    setClasses(kelasData);
-    setTeachers(guruData);
+    setClasses(Array.isArray(kelasData) ? kelasData : []);
+    setTeachers(Array.isArray(guruData) ? guruData : []);
     setLoading(false);
   };
 
@@ -43,16 +44,39 @@ export default function WaliKelasPage() {
     if (classData) {
       setEditingId(classData.id);
       setFormData({
-        name: classData.name,
-        grade: classData.grade,
+        name: classData.name || '',
+        grade: classData.grade || 'X',
+        major: classData.major || (classData.name?.includes('TKJ') ? 'TKJ' : classData.name?.includes('RPL') ? 'RPL' : 'Umum'),
         teacherId: classData.teacherId || '',
         totalStudents: classData.totalStudents || 0
       });
     } else {
       setEditingId(null);
-      setFormData({ name: '', grade: 'X', teacherId: '', totalStudents: 0 });
+      setFormData({ name: '', grade: 'X', major: 'TKJ', teacherId: '', totalStudents: 0 });
     }
     setIsModalOpen(true);
+  };
+
+  const handleNameChange = (val) => {
+    const upper = val.toUpperCase();
+    let newGrade = formData.grade;
+    let newMajor = formData.major;
+    if (upper.startsWith('XII') || upper.includes(' 12') || upper.includes(' XII')) newGrade = 'XII';
+    else if (upper.startsWith('XI') || upper.includes(' 11') || upper.includes(' XI')) newGrade = 'XI';
+    else if (upper.startsWith('X') || upper.includes(' 10') || upper.includes(' X')) newGrade = 'X';
+
+    if (upper.includes('TKJ')) newMajor = 'TKJ';
+    else if (upper.includes('RPL')) newMajor = 'RPL';
+    else if (upper.includes('TBSM') || upper.includes('TSM')) newMajor = 'TBSM';
+    else if (upper.includes('AKL') || upper.includes('AK')) newMajor = 'AKL';
+    else if (upper.includes('DKV')) newMajor = 'DKV';
+
+    setFormData(prev => ({
+      ...prev,
+      name: val,
+      grade: newGrade,
+      major: newMajor
+    }));
   };
 
   const handleCloseModal = () => {
@@ -106,6 +130,14 @@ export default function WaliKelasPage() {
     {
       header: 'Tingkat',
       render: (row) => <Badge variant="primary">{row.grade}</Badge>,
+    },
+    {
+      header: 'Jurusan',
+      render: (row) => {
+        const m = row.major || (row.name?.includes('TKJ') ? 'TKJ' : row.name?.includes('RPL') ? 'RPL' : 'Umum');
+        const variant = m === 'TKJ' ? 'primary' : m === 'RPL' ? 'success' : m === 'TBSM' ? 'warning' : 'info';
+        return <Badge variant={variant}>{m}</Badge>;
+      }
     },
     { header: 'Wali Kelas', accessor: 'teacherName' },
     {
@@ -189,24 +221,41 @@ export default function WaliKelasPage() {
               <input 
                 type="text" 
                 value={formData.name} 
-                onChange={e => setFormData({...formData, name: e.target.value})} 
+                onChange={e => handleNameChange(e.target.value)} 
                 required 
                 placeholder="Misal: X TKJ 1"
                 style={{ width: '100%', padding: '10px', borderRadius: 'var(--radius-md)', border: '1px solid var(--color-border)' }} 
               />
             </div>
             
-            <div>
-              <label style={{ display: 'block', fontSize: 'var(--font-size-sm)', fontWeight: 'var(--font-weight-semibold)', marginBottom: '4px' }}>Tingkat (Angkatan)</label>
-              <select 
-                value={formData.grade} 
-                onChange={e => setFormData({...formData, grade: e.target.value})}
-                style={{ width: '100%', padding: '10px', borderRadius: 'var(--radius-md)', border: '1px solid var(--color-border)' }}
-              >
-                <option value="X">Kelas X</option>
-                <option value="XI">Kelas XI</option>
-                <option value="XII">Kelas XII</option>
-              </select>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--space-3)' }}>
+              <div>
+                <label style={{ display: 'block', fontSize: 'var(--font-size-sm)', fontWeight: 'var(--font-weight-semibold)', marginBottom: '4px' }}>Tingkat</label>
+                <select 
+                  value={formData.grade} 
+                  onChange={e => setFormData({...formData, grade: e.target.value})}
+                  style={{ width: '100%', padding: '10px', borderRadius: 'var(--radius-md)', border: '1px solid var(--color-border)' }}
+                >
+                  <option value="X">Kelas X</option>
+                  <option value="XI">Kelas XI</option>
+                  <option value="XII">Kelas XII</option>
+                </select>
+              </div>
+
+              <div>
+                <label style={{ display: 'block', fontSize: 'var(--font-size-sm)', fontWeight: 'var(--font-weight-semibold)', marginBottom: '4px' }}>Jurusan</label>
+                <select 
+                  value={formData.major} 
+                  onChange={e => setFormData({...formData, major: e.target.value})}
+                  style={{ width: '100%', padding: '10px', borderRadius: 'var(--radius-md)', border: '1px solid var(--color-border)' }}
+                >
+                  <option value="TKJ">TKJ (Teknik Komputer & Jaringan)</option>
+                  <option value="RPL">RPL (Rekayasa Perangkat Lunak)</option>
+                  <option value="TBSM">TBSM (Bisnis Sepeda Motor)</option>
+                  <option value="AKL">AKL (Akuntansi)</option>
+                  <option value="Umum">Umum / Lainnya</option>
+                </select>
+              </div>
             </div>
 
             <div>

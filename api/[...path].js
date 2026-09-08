@@ -717,11 +717,64 @@ app.get('/api/kelas', async (req, res) => {
 app.post('/api/kelas', async (req, res) => {
   try {
     const { name, grade, major, teacherId } = req.body;
+    const trimmedName = (name || '').trim();
+    if (!trimmedName) {
+      return res.status(400).json({ success: false, error: 'Nama kelas wajib diisi' });
+    }
+
+    // Check duplicate name
+    const existing = await prisma.kelas.findUnique({ where: { name: trimmedName } }).catch(() => null);
+    if (existing) {
+      return res.status(400).json({ success: false, error: `Kelas "${trimmedName}" sudah ada.` });
+    }
+
+    // Auto-detect major if not specified
+    let finalMajor = (major || '').trim();
+    if (!finalMajor) {
+      const upper = trimmedName.toUpperCase();
+      if (upper.includes('TKJ')) finalMajor = 'TKJ';
+      else if (upper.includes('RPL')) finalMajor = 'RPL';
+      else if (upper.includes('TBSM') || upper.includes('TSM')) finalMajor = 'TBSM';
+      else if (upper.includes('AKL') || upper.includes('AK')) finalMajor = 'AKL';
+      else if (upper.includes('DKV')) finalMajor = 'DKV';
+      else finalMajor = 'Umum';
+    }
+
+    // Validate teacherId against DB to avoid foreign key errors
+    let validTeacherId = null;
+    if (teacherId && typeof teacherId === 'string' && teacherId.trim() !== '') {
+      const teacher = await prisma.guru.findUnique({ where: { id: teacherId.trim() } }).catch(() => null);
+      if (teacher) validTeacherId = teacher.id;
+    }
+
     const kelas = await prisma.kelas.create({
-      data: { name, grade, major, teacherId: teacherId || null }
+      data: {
+        name: trimmedName,
+        grade: (grade || 'X').trim(),
+        major: finalMajor,
+        teacherId: validTeacherId
+      },
+      include: {
+        waliKelas: true,
+        _count: { select: { riwayatKelas: true } }
+      }
     });
-    res.json({ success: true, data: kelas, message: 'Kelas berhasil ditambahkan' });
+
+    res.json({
+      success: true,
+      data: {
+        id: kelas.id,
+        name: kelas.name,
+        grade: kelas.grade,
+        major: kelas.major,
+        totalStudents: kelas._count?.riwayatKelas || 0,
+        teacherId: kelas.teacherId,
+        teacherName: kelas.waliKelas?.name || '-'
+      },
+      message: 'Kelas berhasil ditambahkan'
+    });
   } catch (err) {
+    console.error('Error adding class:', err);
     res.status(500).json({ success: false, error: err.message });
   }
 });
@@ -730,12 +783,58 @@ app.put('/api/kelas/:id', async (req, res) => {
   const { id } = req.params;
   try {
     const { name, grade, major, teacherId } = req.body;
-    await prisma.kelas.update({
+    const trimmedName = (name || '').trim();
+    if (!trimmedName) {
+      return res.status(400).json({ success: false, error: 'Nama kelas wajib diisi' });
+    }
+
+    // Auto-detect major if not specified
+    let finalMajor = (major || '').trim();
+    if (!finalMajor) {
+      const upper = trimmedName.toUpperCase();
+      if (upper.includes('TKJ')) finalMajor = 'TKJ';
+      else if (upper.includes('RPL')) finalMajor = 'RPL';
+      else if (upper.includes('TBSM') || upper.includes('TSM')) finalMajor = 'TBSM';
+      else if (upper.includes('AKL') || upper.includes('AK')) finalMajor = 'AKL';
+      else if (upper.includes('DKV')) finalMajor = 'DKV';
+      else finalMajor = 'Umum';
+    }
+
+    let validTeacherId = null;
+    if (teacherId && typeof teacherId === 'string' && teacherId.trim() !== '') {
+      const teacher = await prisma.guru.findUnique({ where: { id: teacherId.trim() } }).catch(() => null);
+      if (teacher) validTeacherId = teacher.id;
+    }
+
+    const updated = await prisma.kelas.update({
       where: { id },
-      data: { name, grade, major, teacherId: teacherId || null }
+      data: {
+        name: trimmedName,
+        grade: (grade || 'X').trim(),
+        major: finalMajor,
+        teacherId: validTeacherId
+      },
+      include: {
+        waliKelas: true,
+        _count: { select: { riwayatKelas: true } }
+      }
     });
-    res.json({ success: true, message: 'Kelas berhasil diperbarui' });
+
+    res.json({
+      success: true,
+      data: {
+        id: updated.id,
+        name: updated.name,
+        grade: updated.grade,
+        major: updated.major,
+        totalStudents: updated._count?.riwayatKelas || 0,
+        teacherId: updated.teacherId,
+        teacherName: updated.waliKelas?.name || '-'
+      },
+      message: 'Kelas berhasil diperbarui'
+    });
   } catch (err) {
+    console.error('Error updating class:', err);
     res.status(500).json({ success: false, error: err.message });
   }
 });
@@ -747,6 +846,7 @@ app.delete('/api/kelas/:id', async (req, res) => {
     await prisma.kelas.delete({ where: { id } });
     res.json({ success: true, message: 'Kelas berhasil dihapus' });
   } catch (err) {
+    console.error('Error deleting class:', err);
     res.status(500).json({ success: false, error: err.message });
   }
 });
