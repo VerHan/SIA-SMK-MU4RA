@@ -71,16 +71,17 @@ model Guru {
 }
 
 model Siswa {
-  id           String   @id @default(uuid())
-  nomor        String   @unique
-  name         String
-  gender       String
-  phone        String?
-  phone_parent String?
-  alamat       String?
-  sekolah_asal String?
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  id             String   @id @default(uuid())
+  nomor          String?  @unique
+  name           String
+  gender         String   @default("L")
+  phone          String?
+  phone_parent   String?
+  pekerjaan_ortu String?
+  alamat         String?
+  sekolah_asal   String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
   
   // Relations
   riwayatKelas   RiwayatKelas[]

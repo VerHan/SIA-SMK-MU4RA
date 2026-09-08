@@ -38,14 +38,15 @@ export default function DataSiswaPage() {
 
   /* Form state */
   const [formData, setFormData] = useState({
-    nomor: '',
-    name: '',
     class: 'X TKJ 1',
-    gender: 'L',
+    name: '',
     phone: '',
     phone_parent: '',
+    pekerjaan_ortu: '',
     alamat: '',
     sekolah_asal: '',
+    nomor: '',
+    gender: 'L',
   });
 
   const loadData = () => {
@@ -53,6 +54,9 @@ export default function DataSiswaPage() {
     Promise.all([getStudents(), getClasses()]).then(([studentsData, classesData]) => {
       setStudents(studentsData);
       setClasses(classesData);
+      if (classesData.length > 0 && !formData.class) {
+        setFormData(prev => ({ ...prev, class: classesData[0].name }));
+      }
       setLoading(false);
     });
   };
@@ -63,8 +67,8 @@ export default function DataSiswaPage() {
 
   const handleAddSubmit = async (e) => {
     e.preventDefault();
-    if (!formData.nomor || !formData.name) {
-      setToast({ type: 'error', message: 'Nomor dan Nama Siswa wajib diisi.' });
+    if (!formData.name || !formData.name.trim()) {
+      setToast({ type: 'error', message: 'Nama Siswa wajib diisi.' });
       return;
     }
 
@@ -73,10 +77,22 @@ export default function DataSiswaPage() {
     setSubmitting(false);
 
     if (res.success) {
-      setToast({ type: 'success', message: res.message });
+      setToast({ type: 'success', message: res.message || 'Siswa berhasil ditambahkan' });
       setIsModalOpen(false);
-      setFormData({ nomor: '', name: '', class: 'X TKJ 1', gender: 'L', phone: '', phone_parent: '', alamat: '', sekolah_asal: '' });
+      setFormData({
+        class: classes[0]?.name || 'X TKJ 1',
+        name: '',
+        phone: '',
+        phone_parent: '',
+        pekerjaan_ortu: '',
+        alamat: '',
+        sekolah_asal: '',
+        nomor: '',
+        gender: 'L',
+      });
       loadData();
+    } else {
+      setToast({ type: 'error', message: res.error || 'Gagal menambahkan data siswa.' });
     }
   };
 
@@ -88,33 +104,27 @@ export default function DataSiswaPage() {
         loadData();
       }
     }
-  };
-
-  /* === Fitur Export & Import Excel === */
+  };  /* === Fitur Export & Import Excel === */
   const handleExport = () => {
-    /* Buat mapping data khusus untuk diekspor */
     let exportData = students.map(s => ({
-      'Nomor': s.nomor,
-      'Nama Lengkap': s.name,
-      'Kelas': s.class,
-      'L/P': s.gender,
-      'No WA Sendiri': s.phone || '',
-      'No WA Ortu': s.phone_parent || '',
+      'Kelas': s.class || '',
+      'Nama Lengkap': s.name || '',
+      'Nomer HP': s.phone || '',
+      'Nomer HP Ortu': s.phone_parent || '',
+      'Pekerjaan Ortu': s.pekerjaan_ortu || '',
       'Alamat': s.alamat || '',
-      'Sekolah Asal': s.sekolah_asal || ''
+      'Asal Sekolah': s.sekolah_asal || '',
     }));
 
-    /* Jika data kosong, sediakan 1 row dummy sebagai template */
     if (exportData.length === 0) {
       exportData = [{
-        'Nomor': '2024001',
-        'Nama Lengkap': 'John Doe',
         'Kelas': 'X TKJ 1',
-        'L/P': 'L',
-        'No WA Sendiri': '0812345678',
-        'No WA Ortu': '0812345678',
-        'Alamat': 'Jl. Merdeka',
-        'Sekolah Asal': 'SMPN 1'
+        'Nama Lengkap': 'Muhammad Rizki',
+        'Nomer HP': '081234567890',
+        'Nomer HP Ortu': '089876543210',
+        'Pekerjaan Ortu': 'Wiraswasta',
+        'Alamat': 'Jl. Pemuda No. 10 Bangsri',
+        'Asal Sekolah': 'SMPN 1 Bangsri'
       }];
     }
 
@@ -124,7 +134,7 @@ export default function DataSiswaPage() {
     XLSX.writeFile(wb, "Data_Siswa.xlsx");
   };
 
-  const handleImport = (e) => {
+  const handleImportExcel = (e) => {
     const file = e.target.files[0];
     if (!file) return;
 
@@ -139,14 +149,15 @@ export default function DataSiswaPage() {
 
         /* Map data Excel ke schema internal */
         const mappedData = data.map(row => ({
-          nomor: row['Nomor']?.toString() || row['NIS']?.toString(),
-          name: row['Nama Lengkap'],
-          class: row['Kelas'],
-          gender: row['L/P'],
-          phone: row['No WA Sendiri']?.toString(),
-          phone_parent: row['No WA Ortu']?.toString() || row['HP Ortu']?.toString(),
-          alamat: row['Alamat'],
-          sekolah_asal: row['Sekolah Asal']
+          class: row['Kelas'] || row['class'],
+          name: row['Nama Lengkap'] || row['Nama'] || row['name'],
+          phone: (row['Nomer HP'] || row['No HP'] || row['No WA Sendiri'] || row['phone'])?.toString(),
+          phone_parent: (row['Nomer HP Ortu'] || row['No WA Ortu'] || row['HP Ortu'] || row['phone_parent'])?.toString(),
+          pekerjaan_ortu: row['Pekerjaan Ortu'] || row['pekerjaan_ortu'] || '',
+          alamat: row['Alamat'] || row['alamat'] || '',
+          sekolah_asal: row['Asal Sekolah'] || row['Sekolah Asal'] || row['sekolah_asal'] || '',
+          nomor: (row['Nomor'] || row['NIS'] || row['NISN'])?.toString() || null,
+          gender: row['L/P'] || row['Gender'] || 'L',
         }));
 
         setSubmitting(true);
@@ -185,14 +196,13 @@ export default function DataSiswaPage() {
 
   const columns = [
     { key: 'no', label: 'No', width: '40px', render: (_, row, i) => i + 1 },
-    { key: 'nomor', label: 'Nomor', render: (val, row) => <span><strong>{row.nomor}</strong></span> },
+    { key: 'class', label: 'Kelas', width: '95px', render: (val) => <Badge variant="primary">{val}</Badge> },
     { key: 'name', label: 'Nama Lengkap', cellStyle: { fontWeight: 'var(--font-weight-semibold)' } },
-    { key: 'class', label: 'Kelas', width: '90px', render: (val) => <Badge variant="primary">{val}</Badge> },
-    { key: 'gender', label: 'L/P', width: '90px', render: (val) => <Badge variant={val === 'L' ? 'info' : 'warning'}>{val === 'L' ? 'Laki-laki' : 'Perempuan'}</Badge> },
-    { key: 'phone', label: 'WA Sendiri', width: '120px' },
-    { key: 'phone_parent', label: 'WA Ortu', width: '120px' },
+    { key: 'phone', label: 'Nomer HP', width: '120px', render: (val) => val || '-' },
+    { key: 'phone_parent', label: 'Nomer HP Ortu', width: '120px', render: (val) => val || '-' },
+    { key: 'pekerjaan_ortu', label: 'Pekerjaan Ortu', width: '130px', render: (val) => <span style={{ fontSize: '12px' }}>{val || '-'}</span> },
     { key: 'alamat', label: 'Alamat', render: (val) => <span style={{ fontSize: '12px' }}>{val || '-'}</span> },
-    { key: 'sekolah_asal', label: 'Asal Sekolah', render: (val) => <span style={{ fontSize: '12px' }}>{val || '-'}</span> },
+    { key: 'sekolah_asal', label: 'Asal Sekolah', width: '130px', render: (val) => <span style={{ fontSize: '12px' }}>{val || '-'}</span> },
     {
       key: 'actions',
       label: 'Aksi',
@@ -329,85 +339,69 @@ export default function DataSiswaPage() {
       {/* Modal Form Tambah Siswa */}
       <Modal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} title="Tambah Data Siswa Baru">
         <form onSubmit={handleAddSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }}>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 'var(--space-3)' }}>
-            <Input
-              label="Nomor"
-              value={formData.nomor}
-              onChange={(e) => setFormData({ ...formData, nomor: e.target.value })}
-              placeholder="20240011"
+          {/* 1. Dropdown Kelas */}
+          <div>
+            <label style={{ display: 'block', fontSize: 'var(--font-size-sm)', fontWeight: 'var(--font-weight-medium)', marginBottom: 'var(--space-1)' }}>
+              Kelas <span style={{ color: 'var(--color-danger)' }}>*</span>
+            </label>
+            <select
+              value={formData.class}
+              onChange={(e) => setFormData({ ...formData, class: e.target.value })}
+              style={{
+                width: '100%', padding: '10px 12px', borderRadius: 'var(--radius-md)',
+                border: '1px solid var(--color-border)', fontSize: 'var(--font-size-sm)',
+                background: 'var(--color-surface)',
+              }}
               required
-            />
+            >
+              {classes.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
+            </select>
           </div>
           
+          {/* 2. Nama Lengkap */}
           <Input
             label="Nama Lengkap"
             value={formData.name}
             onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-            placeholder="Masukkan nama lengkap"
+            placeholder="Masukkan nama lengkap siswa"
             required
           />
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--space-3)' }}>
-            <div>
-              <label style={{ display: 'block', fontSize: 'var(--font-size-sm)', fontWeight: 'var(--font-weight-medium)', marginBottom: 'var(--space-1)' }}>
-                Kelas
-              </label>
-              <select
-                value={formData.class}
-                onChange={(e) => setFormData({ ...formData, class: e.target.value })}
-                style={{
-                  width: '100%', padding: '10px 12px', borderRadius: 'var(--radius-md)',
-                  border: '1px solid var(--color-border)', fontSize: 'var(--font-size-sm)',
-                  background: 'var(--color-surface)',
-                }}
-              >
-                {classes.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
-              </select>
-            </div>
-
-            <div>
-              <label style={{ display: 'block', fontSize: 'var(--font-size-sm)', fontWeight: 'var(--font-weight-medium)', marginBottom: 'var(--space-1)' }}>
-                Jenis Kelamin
-              </label>
-              <select
-                value={formData.gender}
-                onChange={(e) => setFormData({ ...formData, gender: e.target.value })}
-                style={{
-                  width: '100%', padding: '10px 12px', borderRadius: 'var(--radius-md)',
-                  border: '1px solid var(--color-border)', fontSize: 'var(--font-size-sm)',
-                  background: 'var(--color-surface)',
-                }}
-              >
-                <option value="L">Laki-laki</option>
-                <option value="P">Perempuan</option>
-              </select>
-            </div>
-          </div>
-
+          {/* 3. Nomer HP Siswa & Nomer HP Ortu */}
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--space-3)' }}>
             <Input
-              label="No. WA Sendiri"
+              label="Nomer HP Siswa"
               value={formData.phone}
               onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
               placeholder="Contoh: 08123456789"
             />
             <Input
-              label="No. WA Orang Tua / Wali"
+              label="Nomer HP Ortu"
               value={formData.phone_parent}
               onChange={(e) => setFormData({ ...formData, phone_parent: e.target.value })}
-              placeholder="Contoh: 08123456789"
+              placeholder="Contoh: 08987654321"
             />
           </div>
 
+          {/* 4. Pekerjaan Ortu */}
+          <Input
+            label="Pekerjaan Ortu"
+            value={formData.pekerjaan_ortu}
+            onChange={(e) => setFormData({ ...formData, pekerjaan_ortu: e.target.value })}
+            placeholder="Contoh: Wiraswasta, PNS, Petani, Karyawan"
+          />
+
+          {/* 5. Alamat */}
           <Input
             label="Alamat"
             value={formData.alamat}
             onChange={(e) => setFormData({ ...formData, alamat: e.target.value })}
-            placeholder="Alamat lengkap"
+            placeholder="Contoh: Ds. Bangsri RT 02/RW 03, Jepara"
           />
 
+          {/* 6. Asal Sekolah */}
           <Input
-            label="Sekolah Asal"
+            label="Asal Sekolah"
             value={formData.sekolah_asal}
             onChange={(e) => setFormData({ ...formData, sekolah_asal: e.target.value })}
             placeholder="Contoh: SMPN 1 Bangsri"
@@ -415,7 +409,7 @@ export default function DataSiswaPage() {
 
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 'var(--space-3)', marginTop: 'var(--space-2)' }}>
             <Button variant="ghost" onClick={() => setIsModalOpen(false)}>Batal</Button>
-            <Button type="submit" loading={submitting}>Simpan Data</Button>
+            <Button type="submit" loading={submitting}>Simpan Siswa</Button>
           </div>
         </form>
       </Modal>

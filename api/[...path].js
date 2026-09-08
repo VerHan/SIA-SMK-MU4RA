@@ -536,13 +536,14 @@ app.get('/api/siswa', async (req, res) => {
       const kelasName = activeRiwayat?.kelas?.name || '-';
       return {
         id: s.id,
-        nomor: s.nomor,
-        nis: s.nomor, // fallback kompatibilitas komponen
+        nomor: s.nomor || '-',
+        nis: s.nomor || '-', // fallback kompatibilitas komponen
         name: s.name,
         class: kelasName,
         gender: s.gender,
         phone: s.phone || '-',
         phone_parent: s.phone_parent || '-',
+        pekerjaan_ortu: s.pekerjaan_ortu || '-',
         alamat: s.alamat || '-',
         sekolah_asal: s.sekolah_asal || '-'
       };
@@ -560,21 +561,23 @@ app.get('/api/siswa', async (req, res) => {
 
 app.post('/api/siswa', async (req, res) => {
   try {
-    const { nomor, nis, name, gender, phone, phone_parent, alamat, sekolah_asal, class: kelasName } = req.body;
-    const finalNomor = String(nomor || nis || '').trim();
-    if (!finalNomor || !name) {
-      return res.status(400).json({ success: false, error: 'Nomor dan Nama Siswa wajib diisi' });
+    const { nomor, nis, name, gender, phone, phone_parent, pekerjaan_ortu, alamat, sekolah_asal, class: kelasName } = req.body;
+    if (!name || !name.trim()) {
+      return res.status(400).json({ success: false, error: 'Nama Siswa wajib diisi' });
     }
+
+    const finalNomor = nomor && String(nomor).trim() ? String(nomor).trim() : null;
 
     const siswa = await prisma.siswa.create({
       data: {
         nomor: finalNomor,
-        name,
+        name: name.trim(),
         gender: gender || 'L',
-        phone: phone || null,
-        phone_parent: phone_parent || null,
-        alamat: alamat || null,
-        sekolah_asal: sekolah_asal || null
+        phone: phone ? String(phone).trim() : null,
+        phone_parent: phone_parent ? String(phone_parent).trim() : null,
+        pekerjaan_ortu: pekerjaan_ortu ? String(pekerjaan_ortu).trim() : null,
+        alamat: alamat ? String(alamat).trim() : null,
+        sekolah_asal: sekolah_asal ? String(sekolah_asal).trim() : null
       }
     });
 
@@ -598,17 +601,19 @@ app.post('/api/siswa', async (req, res) => {
 app.put('/api/siswa/:id', async (req, res) => {
   const { id } = req.params;
   try {
-    const { nomor, nis, name, gender, phone, phone_parent, alamat, sekolah_asal } = req.body;
-    const finalNomor = nomor || nis;
+    const { nomor, nis, name, gender, phone, phone_parent, pekerjaan_ortu, alamat, sekolah_asal } = req.body;
     const dataToUpdate = {
       name,
-      gender,
-      phone: phone || null,
-      phone_parent: phone_parent || null,
-      alamat: alamat || null,
-      sekolah_asal: sekolah_asal || null
+      gender: gender || 'L',
+      phone: phone ? String(phone).trim() : null,
+      phone_parent: phone_parent ? String(phone_parent).trim() : null,
+      pekerjaan_ortu: pekerjaan_ortu ? String(pekerjaan_ortu).trim() : null,
+      alamat: alamat ? String(alamat).trim() : null,
+      sekolah_asal: sekolah_asal ? String(sekolah_asal).trim() : null
     };
-    if (finalNomor) dataToUpdate.nomor = String(finalNomor).trim();
+    if (nomor !== undefined) {
+      dataToUpdate.nomor = nomor && String(nomor).trim() ? String(nomor).trim() : null;
+    }
 
     await prisma.siswa.update({
       where: { id },
@@ -643,11 +648,13 @@ app.post('/api/siswa/import', async (req, res) => {
     const activeTa = await prisma.tahunAjar.findFirst({ where: { isActive: true } });
 
     for (const item of dataArray) {
-      const itemNomor = String(item.nomor || item.nis || '').trim();
-      if (!itemNomor || !item.name) continue;
-      // Check existing
-      const exists = await prisma.siswa.findUnique({ where: { nomor: itemNomor } });
-      if (exists) continue;
+      const itemNomor = item.nomor || item.nis ? String(item.nomor || item.nis).trim() : null;
+      if (!item.name) continue;
+      
+      if (itemNomor) {
+        const exists = await prisma.siswa.findUnique({ where: { nomor: itemNomor } });
+        if (exists) continue;
+      }
 
       const siswa = await prisma.siswa.create({
         data: {
@@ -656,6 +663,7 @@ app.post('/api/siswa/import', async (req, res) => {
           gender: item.gender || 'L',
           phone: item.phone ? String(item.phone) : null,
           phone_parent: item.phone_parent ? String(item.phone_parent) : null,
+          pekerjaan_ortu: item.pekerjaan_ortu ? String(item.pekerjaan_ortu) : null,
           alamat: item.alamat || null,
           sekolah_asal: item.sekolah_asal || null
         }
