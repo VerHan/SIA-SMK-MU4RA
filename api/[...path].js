@@ -440,11 +440,12 @@ app.get('/api/siswa', async (req, res) => {
       const kelasName = activeRiwayat?.kelas?.name || '-';
       return {
         id: s.id,
-        nis: s.nis,
-        nisn: s.nisn || '-',
+        nomor: s.nomor,
+        nis: s.nomor, // fallback kompatibilitas komponen
         name: s.name,
         class: kelasName,
         gender: s.gender,
+        phone: s.phone || '-',
         phone_parent: s.phone_parent || '-',
         alamat: s.alamat || '-',
         sekolah_asal: s.sekolah_asal || '-'
@@ -463,9 +464,22 @@ app.get('/api/siswa', async (req, res) => {
 
 app.post('/api/siswa', async (req, res) => {
   try {
-    const { nis, nisn, name, gender, phone_parent, alamat, sekolah_asal, class: kelasName } = req.body;
+    const { nomor, nis, name, gender, phone, phone_parent, alamat, sekolah_asal, class: kelasName } = req.body;
+    const finalNomor = String(nomor || nis || '').trim();
+    if (!finalNomor || !name) {
+      return res.status(400).json({ success: false, error: 'Nomor dan Nama Siswa wajib diisi' });
+    }
+
     const siswa = await prisma.siswa.create({
-      data: { nis, nisn: nisn || null, name, gender, phone_parent, alamat, sekolah_asal }
+      data: {
+        nomor: finalNomor,
+        name,
+        gender: gender || 'L',
+        phone: phone || null,
+        phone_parent: phone_parent || null,
+        alamat: alamat || null,
+        sekolah_asal: sekolah_asal || null
+      }
     });
 
     // If class is provided, assign to active tahun ajar
@@ -475,7 +489,7 @@ app.post('/api/siswa', async (req, res) => {
       if (kelas && activeTa) {
         await prisma.riwayatKelas.create({
           data: { siswaId: siswa.id, kelasId: kelas.id, tahunAjarId: activeTa.id }
-        });
+        }).catch(() => {});
       }
     }
 
@@ -488,10 +502,21 @@ app.post('/api/siswa', async (req, res) => {
 app.put('/api/siswa/:id', async (req, res) => {
   const { id } = req.params;
   try {
-    const { nis, nisn, name, gender, phone_parent, alamat, sekolah_asal } = req.body;
+    const { nomor, nis, name, gender, phone, phone_parent, alamat, sekolah_asal } = req.body;
+    const finalNomor = nomor || nis;
+    const dataToUpdate = {
+      name,
+      gender,
+      phone: phone || null,
+      phone_parent: phone_parent || null,
+      alamat: alamat || null,
+      sekolah_asal: sekolah_asal || null
+    };
+    if (finalNomor) dataToUpdate.nomor = String(finalNomor).trim();
+
     await prisma.siswa.update({
       where: { id },
-      data: { nis, nisn: nisn || null, name, gender, phone_parent, alamat, sekolah_asal }
+      data: dataToUpdate
     });
     res.json({ success: true, message: 'Data siswa berhasil diperbarui' });
   } catch (err) {
@@ -522,17 +547,18 @@ app.post('/api/siswa/import', async (req, res) => {
     const activeTa = await prisma.tahunAjar.findFirst({ where: { isActive: true } });
 
     for (const item of dataArray) {
-      if (!item.nis || !item.name) continue;
+      const itemNomor = String(item.nomor || item.nis || '').trim();
+      if (!itemNomor || !item.name) continue;
       // Check existing
-      const exists = await prisma.siswa.findUnique({ where: { nis: String(item.nis) } });
+      const exists = await prisma.siswa.findUnique({ where: { nomor: itemNomor } });
       if (exists) continue;
 
       const siswa = await prisma.siswa.create({
         data: {
-          nis: String(item.nis),
-          nisn: item.nisn ? String(item.nisn) : null,
+          nomor: itemNomor,
           name: item.name,
           gender: item.gender || 'L',
+          phone: item.phone ? String(item.phone) : null,
           phone_parent: item.phone_parent ? String(item.phone_parent) : null,
           alamat: item.alamat || null,
           sekolah_asal: item.sekolah_asal || null
