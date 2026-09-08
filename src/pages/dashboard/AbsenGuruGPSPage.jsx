@@ -113,6 +113,7 @@ export default function AbsenGuruGPSPage() {
     setSubmitting(true);
     const res = await submitTeacherAttendance({
       teacherName: user?.name || 'Guru SMK',
+      teacherId: user?.teacherId || user?.id,
       type,
       distanceMeters: distance,
       isWithinGeofence,

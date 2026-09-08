@@ -27,6 +27,8 @@ import {
 } from './mockData';
 import { delay, generateId } from '../utils/helpers';
 import { SUBJECT_GROUPS as DEFAULT_SUBJECT_GROUPS } from '../config/constants';
+import { getCachedAttendance, setCachedAttendance, getJakartaToday } from './attendanceCache';
+export { getCachedAttendance, setCachedAttendance, getJakartaToday } from './attendanceCache';
 
 const SIMULATE_DELAY = true;
 const simulateNetwork = () => SIMULATE_DELAY ? delay(150) : Promise.resolve();
@@ -429,15 +431,28 @@ export async function deleteTeacher(id) {
 
 
 /* ============================================================
-   ABSENSI GURU (GPS GEOFENCING — Legacy)
+   ABSENSI GURU (GPS GEOFENCING — Realtime Caching & Optimistic)
    ============================================================ */
-export async function getTeacherAttendance(dateFilter) {
+export async function getTeacherAttendance(dateFilter, teacherName, teacherId) {
   try {
-    const url = dateFilter ? `/api/guru/absen?date=${dateFilter}` : '/api/guru/absen';
+    let url = '/api/guru/absen';
+    const params = new URLSearchParams();
+    if (dateFilter) params.append('date', dateFilter);
+    if (teacherName) params.append('teacherName', teacherName);
+    if (teacherId) params.append('teacherId', teacherId);
+    if (params.toString()) url += '?' + params.toString();
+
     const res = await fetch(url);
     const contentType = res.headers.get('content-type');
     if (res.ok && contentType && contentType.includes('application/json')) {
       const data = await res.json();
+      // Auto cache jika ada record untuk guru terkait
+      if (Array.isArray(data) && teacherName) {
+        const found = data.find(r => (r.teacherName === teacherName || r.guruName === teacherName) && r.date === (dateFilter || getJakartaToday()));
+        if (found) {
+          setCachedAttendance(teacherName, dateFilter || getJakartaToday(), found);
+        }
+      }
       return data;
     }
     throw new Error('Backend tidak tersedia');
@@ -446,34 +461,48 @@ export async function getTeacherAttendance(dateFilter) {
     /* Fallback ke mock */
     let data = [...teacherAttendanceList];
     if (dateFilter) data = data.filter(a => a.tanggal === dateFilter);
-    return data.map(a => ({
+    if (teacherName) data = data.filter(a => a.guruName === teacherName);
+    const mapped = data.map(a => ({
       id: a.id,
       teacherId: a.guruId,
+      guruId: a.guruId,
       teacherName: a.guruName,
+      guruName: a.guruName,
       date: a.tanggal,
+      tanggal: a.tanggal,
       status: a.status,
       timeIn: a.jamMasuk,
+      jamMasuk: a.jamMasuk,
       timeOut: a.jamPulang,
+      jamPulang: a.jamPulang,
       source: a.sumber,
       distanceMeters: a.jarakMeter
     }));
+
+    if (teacherName && mapped.length > 0) {
+      setCachedAttendance(teacherName, dateFilter || getJakartaToday(), mapped[0]);
+    }
+    return mapped;
   }
 }
 
-export async function submitTeacherAttendance({ teacherName, type, distanceMeters, isWithinGeofence, coords }) {
+export async function submitTeacherAttendance({ teacherName, teacherId, type, distanceMeters, isWithinGeofence, coords }) {
   try {
     const res = await fetch('/api/guru/absen', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ teacherName, type, distanceMeters, isWithinGeofence, coords })
+      body: JSON.stringify({ teacherName, teacherId, type, distanceMeters, isWithinGeofence, coords })
     });
     const contentType = res.headers.get('content-type');
     if (res.ok && contentType && contentType.includes('application/json')) {
       const data = await res.json();
       if (!data.success) {
-        return { success: false, error: data.message };
+        return { success: false, error: data.message, record: data.record };
       }
-      return { success: true, message: data.message };
+      if (data.record) {
+        setCachedAttendance(teacherName, data.record.date || getJakartaToday(), data.record);
+      }
+      return { success: true, message: data.message, record: data.record };
     }
     throw new Error('Backend tidak tersedia');
   } catch (err) {
@@ -481,27 +510,33 @@ export async function submitTeacherAttendance({ teacherName, type, distanceMeter
     
     // Implementasi Mock
     const now = new Date();
-    const jktDateStr = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Jakarta' }).format(now);
-    const today = jktDateStr;
+    const today = getJakartaToday();
     const currentTime = now.toLocaleTimeString('id-ID', { timeZone: 'Asia/Jakarta', hour: '2-digit', minute: '2-digit', hour12: false });
     
     const existingIndex = teacherAttendanceList.findIndex(a => a.guruName === teacherName && a.tanggal === today);
     
     if (type === 'in') {
       if (existingIndex !== -1 && teacherAttendanceList[existingIndex].jamMasuk) {
-        return { success: false, error: 'Anda sudah absen masuk hari ini' };
+        return { success: false, error: 'Anda sudah absen masuk hari ini', record: teacherAttendanceList[existingIndex] };
       }
       
       const newRecord = {
         id: generateId(),
-        guruId: 'g_mock', // Mock ID
+        guruId: teacherId || 'g_mock',
         guruName: teacherName,
+        teacherId: teacherId || 'g_mock',
+        teacherName: teacherName,
         tanggal: today,
+        date: today,
         status: isWithinGeofence ? 'hadir' : 'luar_radius',
         sumber: 'gps',
+        source: 'gps',
         jamMasuk: currentTime,
+        timeIn: currentTime,
         jamPulang: null,
+        timeOut: null,
         jarakMeter: distanceMeters,
+        distanceMeters: distanceMeters,
         keterangan: ''
       };
       
@@ -511,18 +546,22 @@ export async function submitTeacherAttendance({ teacherName, type, distanceMeter
         teacherAttendanceList.unshift(newRecord);
       }
       
-      return { success: true, message: 'Berhasil Absen Masuk (Offline Mode)!' };
+      setCachedAttendance(teacherName, today, newRecord);
+      return { success: true, message: 'Berhasil Absen Masuk!', record: newRecord };
       
     } else if (type === 'out') {
       if (existingIndex === -1 || !teacherAttendanceList[existingIndex].jamMasuk) {
         return { success: false, error: 'Anda belum absen masuk' };
       }
       if (teacherAttendanceList[existingIndex].jamPulang) {
-        return { success: false, error: 'Anda sudah absen pulang hari ini' };
+        return { success: false, error: 'Anda sudah absen pulang hari ini', record: teacherAttendanceList[existingIndex] };
       }
       
       teacherAttendanceList[existingIndex].jamPulang = currentTime;
-      return { success: true, message: 'Berhasil Absen Pulang (Offline Mode)!' };
+      teacherAttendanceList[existingIndex].timeOut = currentTime;
+
+      setCachedAttendance(teacherName, today, teacherAttendanceList[existingIndex]);
+      return { success: true, message: 'Berhasil Absen Pulang!', record: teacherAttendanceList[existingIndex] };
     }
 
     return { success: false, error: 'Tipe absen tidak valid.' };

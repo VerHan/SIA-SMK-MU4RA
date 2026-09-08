@@ -1,6 +1,6 @@
 /* ============================================================
    NewsSlider.jsx — Auto-slide Berita / Pengumuman
-   Fixed: konsisten height, full-width, cleaner styling
+   Card tinggi dengan dukungan gambar (Image Banner + Overlay)
    ============================================================ */
 
 import { useState, useEffect, useRef, useCallback } from 'react';
@@ -8,35 +8,43 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 const DUMMY_NEWS = [
   {
     id: 1,
-    title: 'Pengumuman Jadwal UTS Semester Ganjil 2024/2025',
+    title: 'Pengumuman Jadwal UTS Semester Ganjil 2025/2026',
     category: 'Pengumuman',
-    date: '18 Agustus 2024',
+    date: '18 Agustus 2025',
     accent: '#3B82F6',
     icon: '📋',
+    image: 'https://images.unsplash.com/photo-1523240795612-9a054b0db644?w=800&auto=format&fit=crop&q=80',
+    summary: 'Jadwal pelaksanaan Ujian Tengah Semester (UTS) telah dirilis. Harap perhatikan jadwal dan tata tertib.',
   },
   {
     id: 2,
     title: 'Kegiatan Lomba Kompetensi Siswa (LKS) Tingkat Kabupaten',
     category: 'Kegiatan',
-    date: '20 Agustus 2024',
+    date: '20 Agustus 2025',
     accent: '#6366F1',
     icon: '🏆',
+    image: 'https://images.unsplash.com/photo-1509062522246-3755977927d7?w=800&auto=format&fit=crop&q=80',
+    summary: 'Dukungan dan doa untuk kontingen SMK Muhammadiyah 04 dalam kompetisi LKS tingkat Kabupaten.',
   },
   {
     id: 3,
-    title: 'Rapat Koordinasi Guru & Staf Bulan Agustus',
+    title: 'Rapat Koordinasi Guru & Staf Pengajar Bulan Ini',
     category: 'Internal',
-    date: '22 Agustus 2024',
+    date: '22 Agustus 2025',
     accent: '#0EA5E9',
     icon: '📌',
+    image: 'https://images.unsplash.com/photo-1577896851231-70ef18881754?w=800&auto=format&fit=crop&q=80',
+    summary: 'Agenda evaluasi KBM dan persiapan kurikulum bersama Kepala Sekolah dan jajaran manajemen.',
   },
   {
     id: 4,
     title: 'Pembagian Rapor Semester Genap — Harap Tepat Waktu',
     category: 'Pengumuman',
-    date: '25 Agustus 2024',
+    date: '25 Agustus 2025',
     accent: '#8B5CF6',
     icon: '📄',
+    image: 'https://images.unsplash.com/photo-1511629091441-ee46146481b6?w=800&auto=format&fit=crop&q=80',
+    summary: 'Pengambilan buku rapor dan lembar hasil belajar oleh wali murid di ruang kelas masing-masing.',
   },
 ];
 
@@ -46,13 +54,15 @@ export default function NewsSlider({ news = DUMMY_NEWS }) {
   const startX = useRef(null);
   const autoRef = useRef(null);
 
+  const activeNews = news && news.length > 0 ? news : DUMMY_NEWS;
+
   const goNext = useCallback(() => {
-    setCurrent(prev => (prev + 1) % news.length);
-  }, [news.length]);
+    setCurrent(prev => (prev + 1) % activeNews.length);
+  }, [activeNews.length]);
 
   const goPrev = useCallback(() => {
-    setCurrent(prev => (prev - 1 + news.length) % news.length);
-  }, [news.length]);
+    setCurrent(prev => (prev - 1 + activeNews.length) % activeNews.length);
+  }, [activeNews.length]);
 
   useEffect(() => {
     autoRef.current = setInterval(goNext, 5000);
@@ -81,24 +91,30 @@ export default function NewsSlider({ news = DUMMY_NEWS }) {
     setIsDragging(false);
   };
 
-  const item = news[current];
+  const item = activeNews[current] || activeNews[0];
 
   return (
-    <div style={{ padding: '0 16px' }}>
+    <div style={{ padding: '0 16px', marginBottom: '4px' }}>
       {/* Header row */}
       <div style={{
         display: 'flex', justifyContent: 'space-between', alignItems: 'center',
         marginBottom: '10px', padding: '0 4px',
       }}>
-        <span style={{ fontSize: '12px', fontWeight: 600, color: '#64748B', letterSpacing: '0.6px', textTransform: 'uppercase' }}>
-          Berita & Pengumuman
-        </span>
-        <span style={{ fontSize: '11px', color: '#94A3B8' }}>
-          {current + 1}/{news.length}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+          <span style={{ fontSize: '13px' }}>📢</span>
+          <span style={{ fontSize: '12px', fontWeight: 700, color: '#475569', letterSpacing: '0.6px', textTransform: 'uppercase' }}>
+            Berita & Pengumuman
+          </span>
+        </div>
+        <span style={{
+          fontSize: '11px', fontWeight: 600, color: '#64748B',
+          background: 'rgba(0,0,0,0.05)', padding: '2px 8px', borderRadius: '12px',
+        }}>
+          {current + 1} / {activeNews.length}
         </span>
       </div>
 
-      {/* Slide Card — fixed height so layout is always consistent */}
+      {/* Slide Card — Tinggi lebih besar (235px) untuk menampung gambar & teks */}
       <div
         onTouchStart={handleTouchStart}
         onTouchEnd={handleTouchEnd}
@@ -106,12 +122,11 @@ export default function NewsSlider({ news = DUMMY_NEWS }) {
         onMouseUp={handleTouchEnd}
         style={{
           width: '100%',
-          height: '110px',
-          borderRadius: '16px',
-          background: 'rgba(255,255,255,0.8)',
-          boxShadow: '0 4px 16px rgba(0,0,0,0.03)',
-          border: `1px solid ${item.accent}33`,
-          padding: '16px',
+          height: '235px',
+          borderRadius: '20px',
+          background: '#FFFFFF',
+          boxShadow: '0 8px 24px rgba(15, 23, 42, 0.05)',
+          border: '1px solid rgba(0, 0, 0, 0.07)',
           position: 'relative',
           overflow: 'hidden',
           cursor: 'grab',
@@ -119,78 +134,173 @@ export default function NewsSlider({ news = DUMMY_NEWS }) {
           boxSizing: 'border-box',
           display: 'flex',
           flexDirection: 'column',
-          justifyContent: 'space-between',
-          animation: 'slideIn 0.3s ease',
+          transition: 'transform 0.2s ease, box-shadow 0.2s ease',
         }}
       >
-        {/* Colored left accent bar */}
+        {/* Banner Gambar Atas */}
         <div style={{
-          position: 'absolute', left: 0, top: '16px', bottom: '16px',
-          width: '3px', borderRadius: '0 3px 3px 0',
-          background: item.accent,
-          boxShadow: `0 0 8px ${item.accent}88`,
-        }} />
+          width: '100%',
+          height: '135px',
+          position: 'relative',
+          overflow: 'hidden',
+          background: `linear-gradient(135deg, ${item.accent}33, ${item.accent}11)`,
+        }}>
+          {item.image ? (
+            <img
+              src={item.image}
+              alt={item.title}
+              style={{
+                width: '100%',
+                height: '100%',
+                objectFit: 'cover',
+                display: 'block',
+                transition: 'transform 0.4s ease',
+              }}
+              onError={(e) => {
+                e.target.style.display = 'none';
+              }}
+            />
+          ) : (
+            <div style={{
+              width: '100%',
+              height: '100%',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              fontSize: '48px',
+              background: `linear-gradient(135deg, ${item.accent}20, ${item.accent}05)`,
+            }}>
+              {item.icon || '📢'}
+            </div>
+          )}
 
-        {/* Decorative circle */}
-        <div style={{
-          position: 'absolute', right: '-20px', top: '-20px',
-          width: '80px', height: '80px', borderRadius: '50%',
-          background: `${item.accent}15`,
-        }} />
+          {/* Gradient Overlay bawah gambar */}
+          <div style={{
+            position: 'absolute',
+            bottom: 0,
+            left: 0,
+            right: 0,
+            height: '50px',
+            background: 'linear-gradient(to top, rgba(0,0,0,0.45) 0%, transparent 100%)',
+            pointerEvents: 'none',
+          }} />
 
-        <div style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', paddingLeft: '10px' }}>
-          {/* Category badge */}
-          <span style={{
-            display: 'inline-flex', alignItems: 'center', gap: '4px',
-            padding: '2px 8px', borderRadius: '20px',
-            background: `${item.accent}20`,
-            border: `1px solid ${item.accent}44`,
-            fontSize: '10px', fontWeight: 600, color: item.accent,
-            flexShrink: 0,
+          {/* Badge Kategori Floating */}
+          <div style={{
+            position: 'absolute',
+            top: '12px',
+            left: '12px',
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: '5px',
+            padding: '4px 10px',
+            borderRadius: '20px',
+            background: 'rgba(255, 255, 255, 0.94)',
+            backdropFilter: 'blur(8px)',
+            boxShadow: '0 2px 8px rgba(0,0,0,0.12)',
+            fontSize: '11px',
+            fontWeight: 700,
+            color: item.accent,
           }}>
-            {item.icon} {item.category}
-          </span>
+            <span>{item.icon}</span>
+            <span>{item.category}</span>
+          </div>
+
+          {/* Badge Tanggal Floating */}
+          <div style={{
+            position: 'absolute',
+            bottom: '8px',
+            right: '12px',
+            padding: '2px 8px',
+            borderRadius: '10px',
+            background: 'rgba(0, 0, 0, 0.6)',
+            backdropFilter: 'blur(4px)',
+            fontSize: '10px',
+            fontWeight: 500,
+            color: '#FFFFFF',
+          }}>
+            📅 {item.date}
+          </div>
         </div>
 
-        <div style={{ paddingLeft: '10px' }}>
-          <p style={{
-            fontSize: '13px', fontWeight: 600, color: '#0F172A',
-            margin: '0 0 4px', lineHeight: 1.4,
-            display: '-webkit-box', WebkitLineClamp: 2,
-            WebkitBoxOrient: 'vertical', overflow: 'hidden',
-          }}>
-            {item.title}
-          </p>
-          <span style={{ fontSize: '11px', color: '#64748B' }}>
-            {item.date}
-          </span>
+        {/* Info Konten Bawah */}
+        <div style={{
+          flex: 1,
+          padding: '12px 16px',
+          display: 'flex',
+          flexDirection: 'column',
+          justifyContent: 'space-between',
+          background: '#FFFFFF',
+        }}>
+          <div>
+            <h3 style={{
+              fontSize: '14px',
+              fontWeight: 700,
+              color: '#0F172A',
+              margin: '0 0 4px',
+              lineHeight: 1.35,
+              display: '-webkit-box',
+              WebkitLineClamp: 2,
+              WebkitBoxOrient: 'vertical',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+            }}>
+              {item.title}
+            </h3>
+            {item.summary && (
+              <p style={{
+                fontSize: '11px',
+                color: '#64748B',
+                margin: 0,
+                lineHeight: 1.35,
+                display: '-webkit-box',
+                WebkitLineClamp: 1,
+                WebkitBoxOrient: 'vertical',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+              }}>
+                {item.summary}
+              </p>
+            )}
+          </div>
+
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '4px' }}>
+            <span style={{ fontSize: '10px', color: '#94A3B8' }}>
+              Ketuk untuk detail
+            </span>
+            <span style={{
+              fontSize: '11px',
+              fontWeight: 600,
+              color: item.accent,
+              display: 'flex',
+              alignItems: 'center',
+              gap: '2px',
+            }}>
+              Lihat →
+            </span>
+          </div>
         </div>
       </div>
 
       {/* Dot Indicators */}
-      <div style={{ display: 'flex', justifyContent: 'center', gap: '5px', marginTop: '10px' }}>
-        {news.map((_, i) => (
+      <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '6px', marginTop: '10px' }}>
+        {activeNews.map((n, i) => (
           <button
             key={i}
             onClick={() => { setCurrent(i); resetAuto(); }}
             style={{
-              width: i === current ? '18px' : '5px',
-              height: '5px',
+              width: i === current ? '22px' : '6px',
+              height: '6px',
               borderRadius: '3px',
-              background: i === current ? item.accent : 'rgba(0,0,0,0.1)',
-              border: 'none', cursor: 'pointer', padding: 0,
-              transition: 'all 0.3s ease',
+              background: i === current ? (n.accent || '#3B82F6') : 'rgba(0,0,0,0.12)',
+              border: 'none',
+              cursor: 'pointer',
+              padding: 0,
+              transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
             }}
           />
         ))}
       </div>
-
-      <style>{`
-        @keyframes slideIn {
-          from { opacity: 0.5; transform: translateX(12px); }
-          to { opacity: 1; transform: translateX(0); }
-        }
-      `}</style>
     </div>
   );
 }

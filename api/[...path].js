@@ -123,12 +123,19 @@ app.post('/api/auth/login', async (req, res) => {
 
 // 2. Guru Absensi (GET)
 app.get('/api/guru/absen', async (req, res) => {
-  const { date } = req.query; // YYYY-MM-DD
+  const { date, teacherName, guruId, teacherId } = req.query; // YYYY-MM-DD
   try {
     let where = {};
     if (date) {
-      where.tanggal = new Date(date);
+      where.tanggal = new Date(`${date}T00:00:00.000Z`);
     }
+    const targetGuruId = teacherId || guruId;
+    if (targetGuruId) {
+      where.guruId = targetGuruId;
+    } else if (teacherName) {
+      where.guru = { name: teacherName };
+    }
+
     const absensi = await prisma.absensiGuru.findMany({
       where,
       include: { guru: true },
@@ -162,9 +169,16 @@ app.get('/api/guru/absen', async (req, res) => {
 
 // 3. Guru Absensi (POST GPS)
 app.post('/api/guru/absen', async (req, res) => {
-  const { teacherName, type, distanceMeters, isWithinGeofence } = req.body;
+  const { teacherName, teacherId, guruId, type, distanceMeters, isWithinGeofence } = req.body;
   try {
-    const guru = await prisma.guru.findFirst({ where: { name: teacherName } });
+    const targetGuruId = teacherId || guruId;
+    let guru = null;
+    if (targetGuruId) {
+      guru = await prisma.guru.findUnique({ where: { id: targetGuruId } });
+    }
+    if (!guru && teacherName) {
+      guru = await prisma.guru.findFirst({ where: { name: teacherName } });
+    }
     if (!guru) return res.status(404).json({ success: false, message: 'Guru tidak ditemukan' });
 
     const now = new Date();
@@ -177,7 +191,28 @@ app.post('/api/guru/absen', async (req, res) => {
     });
 
     if (type === 'in') {
-      if (absensi && absensi.jamMasuk) return res.json({ success: false, message: 'Anda sudah absen masuk hari ini' });
+      if (absensi && absensi.jamMasuk) {
+        return res.json({
+          success: false,
+          message: 'Anda sudah absen masuk hari ini',
+          record: {
+            id: absensi.id,
+            teacherId: guru.id,
+            guruId: guru.id,
+            teacherName: guru.name,
+            guruName: guru.name,
+            date: jktDateStr,
+            tanggal: jktDateStr,
+            status: absensi.status,
+            timeIn: absensi.jamMasuk,
+            jamMasuk: absensi.jamMasuk,
+            timeOut: absensi.jamPulang,
+            jamPulang: absensi.jamPulang,
+            distanceMeters: absensi.jarakMeter,
+            source: absensi.sumber,
+          }
+        });
+      }
       
       if (!absensi) {
         absensi = await prisma.absensiGuru.create({
@@ -196,16 +231,77 @@ app.post('/api/guru/absen', async (req, res) => {
           data: { jamMasuk: currentTime, sumber: 'gps', jarakMeter: distanceMeters, status: isWithinGeofence ? 'hadir' : 'luar_radius' }
         });
       }
-      return res.json({ success: true, message: 'Berhasil Absen Masuk!' });
+
+      const returnRecord = {
+        id: absensi.id,
+        teacherId: guru.id,
+        guruId: guru.id,
+        teacherName: guru.name,
+        guruName: guru.name,
+        date: jktDateStr,
+        tanggal: jktDateStr,
+        status: absensi.status,
+        timeIn: absensi.jamMasuk,
+        jamMasuk: absensi.jamMasuk,
+        timeOut: absensi.jamPulang,
+        jamPulang: absensi.jamPulang,
+        distanceMeters: absensi.jarakMeter,
+        jarakMeter: absensi.jarakMeter,
+        source: absensi.sumber,
+        sumber: absensi.sumber,
+      };
+
+      return res.json({ success: true, message: 'Berhasil Absen Masuk!', record: returnRecord });
     } else if (type === 'out') {
       if (!absensi || !absensi.jamMasuk) return res.json({ success: false, message: 'Anda belum absen masuk' });
-      if (absensi.jamPulang) return res.json({ success: false, message: 'Anda sudah absen pulang hari ini' });
+      if (absensi.jamPulang) {
+        return res.json({
+          success: false,
+          message: 'Anda sudah absen pulang hari ini',
+          record: {
+            id: absensi.id,
+            teacherId: guru.id,
+            guruId: guru.id,
+            teacherName: guru.name,
+            guruName: guru.name,
+            date: jktDateStr,
+            tanggal: jktDateStr,
+            status: absensi.status,
+            timeIn: absensi.jamMasuk,
+            jamMasuk: absensi.jamMasuk,
+            timeOut: absensi.jamPulang,
+            jamPulang: absensi.jamPulang,
+            distanceMeters: absensi.jarakMeter,
+            source: absensi.sumber,
+          }
+        });
+      }
       
-      await prisma.absensiGuru.update({
+      absensi = await prisma.absensiGuru.update({
         where: { id: absensi.id },
         data: { jamPulang: currentTime }
       });
-      return res.json({ success: true, message: 'Berhasil Absen Pulang!' });
+
+      const returnRecord = {
+        id: absensi.id,
+        teacherId: guru.id,
+        guruId: guru.id,
+        teacherName: guru.name,
+        guruName: guru.name,
+        date: jktDateStr,
+        tanggal: jktDateStr,
+        status: absensi.status,
+        timeIn: absensi.jamMasuk,
+        jamMasuk: absensi.jamMasuk,
+        timeOut: absensi.jamPulang,
+        jamPulang: absensi.jamPulang,
+        distanceMeters: absensi.jarakMeter,
+        jarakMeter: absensi.jarakMeter,
+        source: absensi.sumber,
+        sumber: absensi.sumber,
+      };
+
+      return res.json({ success: true, message: 'Berhasil Absen Pulang!', record: returnRecord });
     }
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });

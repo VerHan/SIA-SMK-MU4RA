@@ -275,6 +275,9 @@ model AbsensiGuru {
   updatedAt   DateTime @updatedAt
 
   guru        Guru     @relation(fields: [guruId], references: [id])
+
+  @@index([guruId, tanggal])
+  @@index([tanggal])
 }
 
 model LogAktivitas {

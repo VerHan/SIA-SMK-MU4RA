@@ -6,7 +6,13 @@
 
 import { useState, useEffect } from 'react';
 import { useAuth } from '../../hooks/useAuth';
-import { getTeacherAttendance, getSchedule } from '../../services/api';
+import {
+  getTeacherAttendance,
+  getSchedule,
+  getCachedAttendance,
+  setCachedAttendance,
+  getJakartaToday,
+} from '../../services/api';
 import { DAYS } from '../../config/constants';
 import NewsSlider from '../../components/mobile/NewsSlider';
 import FeatureGrid from '../../components/mobile/FeatureGrid';
@@ -34,27 +40,49 @@ function getRoleLabel(role) {
 export default function MobileHomePage() {
   const { user } = useAuth();
   const now = new Date();
-  const today = now.toISOString().split('T')[0];
+  const today = getJakartaToday();
   const todayName = DAYS[now.getDay() - 1] || '';
   const nowMinutes = now.getHours() * 60 + now.getMinutes();
 
   const dateLabel = now.toLocaleDateString('id-ID', { weekday: 'long', day: 'numeric', month: 'short', year: 'numeric' });
 
-  // Absen status
-  const [absenRecord, setAbsenRecord] = useState(null);
+  // Inisialisasi status absen langsung dari cache lokal (0ms delay)
+  const [absenRecord, setAbsenRecord] = useState(() => getCachedAttendance(user?.name, today));
   // Jadwal mengajar hari ini
   const [nextClass, setNextClass] = useState(null);
 
   useEffect(() => {
-    // Fetch absen record hari ini
-    if (user?.name) {
-      getTeacherAttendance(today).then(data => {
-        const rec = data.find(r => r.teacherName === user.name && r.date === today);
-        setAbsenRecord(rec || null);
-      });
-    }
+    if (!user?.name) return;
 
-    // Fetch jadwal mengajar hari ini → cari kelas berikutnya / sedang berlangsung
+    // Pastikan data sinkron dari cache terbaru
+    const cached = getCachedAttendance(user.name, today);
+    if (cached) setAbsenRecord(cached);
+
+    // Fetch absen record hari ini di background
+    getTeacherAttendance(today, user.name).then(data => {
+      const rec = Array.isArray(data)
+        ? data.find(r => (r.teacherName === user.name || r.guruName === user.name) && (r.date === today || r.tanggal === today))
+        : (data?.teacherName === user.name ? data : null);
+      if (rec) {
+        setAbsenRecord(rec);
+        setCachedAttendance(user.name, today, rec);
+      }
+    }).catch(err => {
+      console.warn('Background attendance fetch error in Home:', err);
+    });
+
+    // Dengarkan event pembaruan presensi dari menu Absen GPS
+    const handleUpdate = (e) => {
+      if (e.detail?.teacherName === user.name && e.detail?.date === today) {
+        setAbsenRecord(e.detail.record);
+      }
+    };
+    window.addEventListener('sia-attendance-updated', handleUpdate);
+    return () => window.removeEventListener('sia-attendance-updated', handleUpdate);
+  }, [user?.name, today]);
+
+  // Fetch jadwal mengajar hari ini → cari kelas berikutnya / sedang berlangsung
+  useEffect(() => {
     if (user?.name && todayName) {
       getSchedule(todayName).then(schedules => {
         const mySchedules = schedules
@@ -84,7 +112,7 @@ export default function MobileHomePage() {
         setNextClass({ ...last, status: 'done' });
       });
     }
-  }, [user?.name, today, todayName, nowMinutes]);
+  }, [user?.name, todayName, nowMinutes]);
 
   // Format start time dari jamKe
   function formatJamKe(jamKe) {

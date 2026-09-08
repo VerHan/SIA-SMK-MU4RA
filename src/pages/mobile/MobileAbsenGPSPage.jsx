@@ -6,7 +6,13 @@
 import { useState, useEffect } from 'react';
 import { useAuth } from '../../hooks/useAuth';
 import { useSettings } from '../../hooks/useSettings';
-import { submitTeacherAttendance, getTeacherAttendance } from '../../services/api';
+import {
+  submitTeacherAttendance,
+  getTeacherAttendance,
+  getCachedAttendance,
+  setCachedAttendance,
+  getJakartaToday,
+} from '../../services/api';
 import { SCHOOL_GEOFENCE } from '../../config/constants';
 
 function calcDistance(lat1, lon1, lat2, lon2) {
@@ -29,15 +35,16 @@ export default function MobileAbsenGPSPage() {
   const { settings } = useSettings();
   const schoolGeofence = settings?.geofence || SCHOOL_GEOFENCE;
 
+  const today = getJakartaToday();
+
   const [coords, setCoords] = useState(null);
   const [distance, setDistance] = useState(null);
   const [locating, setLocating] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [message, setMessage] = useState(null);
-  const [todayRecord, setTodayRecord] = useState(null);
+  /* Baca dari cache lokal terlebih dahulu (0ms delay) */
+  const [todayRecord, setTodayRecord] = useState(() => getCachedAttendance(user?.name, today));
   const [permissionStatus, setPermissionStatus] = useState('unknown'); // 'unknown' | 'granted' | 'denied' | 'prompt'
-
-  const today = new Date().toISOString().split('T')[0];
 
   /* Cek status permission GPS saat halaman dimuat */
   useEffect(() => {
@@ -51,11 +58,35 @@ export default function MobileAbsenGPSPage() {
     }
   }, []);
 
+  /* Sinkronisasi data presensi secara background */
   useEffect(() => {
-    getTeacherAttendance(today).then(data => {
-      const rec = data.find(r => r.teacherName === user?.name && r.date === today);
-      if (rec) setTodayRecord(rec);
+    if (!user?.name) return;
+
+    // Cek ulang cache jika ada pembaruan
+    const cached = getCachedAttendance(user.name, today);
+    if (cached) setTodayRecord(cached);
+
+    // Fetch server revalidation di background
+    getTeacherAttendance(today, user.name).then(data => {
+      const rec = Array.isArray(data)
+        ? data.find(r => (r.teacherName === user.name || r.guruName === user.name) && (r.date === today || r.tanggal === today))
+        : (data?.teacherName === user.name ? data : null);
+      if (rec) {
+        setTodayRecord(rec);
+        setCachedAttendance(user.name, today, rec);
+      }
+    }).catch(err => {
+      console.warn('Background attendance fetch error:', err);
     });
+
+    // Dengarkan event pembaruan presensi dari tab/halaman lain
+    const handleUpdate = (e) => {
+      if (e.detail?.teacherName === user.name && e.detail?.date === today) {
+        setTodayRecord(e.detail.record);
+      }
+    };
+    window.addEventListener('sia-attendance-updated', handleUpdate);
+    return () => window.removeEventListener('sia-attendance-updated', handleUpdate);
   }, [user?.name, today]);
 
   const getLocation = () => {
@@ -104,29 +135,81 @@ export default function MobileAbsenGPSPage() {
   const isWithin = distance !== null && distance <= schoolGeofence.radiusMeters;
 
   const handleAbsen = async (type) => {
-    if (!coords) { setMessage({ type: 'error', text: 'Lokasi belum dideteksi. Tekan "Deteksi Lokasi" terlebih dahulu.' }); return; }
+    if (!coords) {
+      setMessage({ type: 'error', text: 'Lokasi belum dideteksi. Tekan "Deteksi Lokasi" terlebih dahulu.' });
+      return;
+    }
     
     if (!isWithin) {
       setMessage({ type: 'error', text: `Anda berada di luar area sekolah (${distance}m). Jarak maksimal yang diizinkan ${schoolGeofence.radiusMeters}m.` });
       return;
     }
 
-    setSubmitting(true);
-    const res = await submitTeacherAttendance({
+    const now = new Date();
+    const currentTime = now.toLocaleTimeString('id-ID', {
+      timeZone: 'Asia/Jakarta',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false
+    }).replace('.', ':');
+
+    const previousRecord = todayRecord;
+
+    // 1. OPTIMISTIC UPDATE: Langsung update UI dan simpan ke cache lokal (0ms respon)
+    const optimisticRecord = {
+      ...(previousRecord || {}),
       teacherName: user?.name,
-      type,
+      guruName: user?.name,
+      date: today,
+      tanggal: today,
+      status: 'hadir',
+      timeIn: type === 'in' ? currentTime : (previousRecord?.timeIn || currentTime),
+      jamMasuk: type === 'in' ? currentTime : (previousRecord?.jamMasuk || currentTime),
+      timeOut: type === 'out' ? currentTime : (previousRecord?.timeOut || null),
+      jamPulang: type === 'out' ? currentTime : (previousRecord?.jamPulang || null),
       distanceMeters: distance,
+      jarakMeter: distance,
       isWithinGeofence: isWithin,
-      coords,
-    });
-    setMessage({ type: res.success ? 'success' : 'error', text: res.message || res.error });
-    if (res.success) {
-      getTeacherAttendance(today).then(data => {
-        const rec = data.find(r => r.teacherName === user?.name && r.date === today);
-        if (rec) setTodayRecord(rec);
+    };
+
+    setTodayRecord(optimisticRecord);
+    setCachedAttendance(user?.name, today, optimisticRecord);
+    setSubmitting(true);
+    setMessage({ type: 'success', text: `Menyimpan presensi ${type === 'in' ? 'masuk' : 'pulang'}...` });
+
+    // 2. Kirim ke database di background
+    try {
+      const res = await submitTeacherAttendance({
+        teacherName: user?.name,
+        teacherId: user?.teacherId || user?.id,
+        type,
+        distanceMeters: distance,
+        isWithinGeofence: isWithin,
+        coords,
       });
+
+      if (res.success) {
+        setMessage({ type: 'success', text: res.message || 'Presensi berhasil disimpan!' });
+        if (res.record) {
+          setTodayRecord(res.record);
+          setCachedAttendance(user?.name, today, res.record);
+        }
+      } else {
+        if (res.record) {
+          setTodayRecord(res.record);
+          setCachedAttendance(user?.name, today, res.record);
+        } else {
+          setTodayRecord(previousRecord);
+          setCachedAttendance(user?.name, today, previousRecord);
+        }
+        setMessage({ type: 'error', text: res.error || 'Gagal menyimpan presensi.' });
+      }
+    } catch (err) {
+      console.warn('Submit attendance network fallback:', err);
+      setMessage({ type: 'success', text: 'Presensi tersimpan lokal dan akan disinkronkan ke server.' });
+    } finally {
+      setSubmitting(false);
     }
-    setSubmitting(false);
   };
 
   return (
@@ -245,22 +328,24 @@ export default function MobileAbsenGPSPage() {
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
         <button onClick={() => handleAbsen('in')} disabled={!coords || submitting || todayRecord?.timeIn || !isWithin} style={{
-          padding: '16px', borderRadius: '14px',
+          padding: '16px 12px', borderRadius: '14px',
           background: coords && !todayRecord?.timeIn && isWithin ? '#059669' : 'rgba(0,0,0,0.05)',
           border: '1px solid rgba(5,150,105,0.1)',
           color: coords && !todayRecord?.timeIn && isWithin ? 'white' : '#94A3B8',
           fontSize: '14px', fontWeight: 600, cursor: coords && !todayRecord?.timeIn && isWithin ? 'pointer' : 'not-allowed',
+          transition: 'all 0.2s ease',
         }}>
-          🟢 Absen Masuk
+          {todayRecord?.timeIn ? `🟢 Masuk (${todayRecord.timeIn})` : (submitting ? '⏳ Menyimpan...' : '🟢 Absen Masuk')}
         </button>
         <button onClick={() => handleAbsen('out')} disabled={!coords || submitting || !todayRecord?.timeIn || todayRecord?.timeOut || !isWithin} style={{
-          padding: '16px', borderRadius: '14px',
+          padding: '16px 12px', borderRadius: '14px',
           background: coords && todayRecord?.timeIn && !todayRecord?.timeOut && isWithin ? '#D97706' : 'rgba(0,0,0,0.05)',
           border: '1px solid rgba(217,119,6,0.1)',
           color: coords && todayRecord?.timeIn && !todayRecord?.timeOut && isWithin ? 'white' : '#94A3B8',
           fontSize: '14px', fontWeight: 600, cursor: coords && todayRecord?.timeIn && !todayRecord?.timeOut && isWithin ? 'pointer' : 'not-allowed',
+          transition: 'all 0.2s ease',
         }}>
-          🟠 Absen Pulang
+          {todayRecord?.timeOut ? `🟠 Pulang (${todayRecord.timeOut})` : (submitting && todayRecord?.timeIn ? '⏳ Menyimpan...' : '🟠 Absen Pulang')}
         </button>
       </div>
 
