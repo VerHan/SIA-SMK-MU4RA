@@ -46,15 +46,36 @@ export default function MataPelajaranPage() {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    if (editData) {
-      await updateSubject(editData.id, form);
-    } else {
-      await addSubject(form);
-    }
+    const dataToSave = { ...form };
+    const isEdit = Boolean(editData);
+    const targetId = editData?.id;
+
     setShowModal(false);
     setEditData(null);
     setForm({ kode: '', nama: '', kelompok: subjectGroups[0] || '' });
-    fetchData();
+
+    if (isEdit) {
+      const prevSubjects = [...subjects];
+      setSubjects(prev => prev.map(s => s.id === targetId ? { ...s, ...dataToSave } : s));
+      updateSubject(targetId, dataToSave).then(res => {
+        if (res && res.success === false) {
+          setSubjects(prevSubjects);
+        }
+      });
+    } else {
+      const tempId = 'subj_' + Date.now();
+      const optimisticSubject = { ...dataToSave, id: tempId };
+      setSubjects(prev => [...prev, optimisticSubject]);
+
+      addSubject(dataToSave).then(res => {
+        if (res && res.success !== false) {
+          const persisted = res.data || { ...optimisticSubject, id: res.id || tempId };
+          setSubjects(prev => prev.map(s => s.id === tempId ? persisted : s));
+        } else {
+          setSubjects(prev => prev.filter(s => s.id !== tempId));
+        }
+      });
+    }
   };
 
   const handleEdit = (subj) => {
@@ -65,8 +86,13 @@ export default function MataPelajaranPage() {
 
   const handleDelete = async (id) => {
     if (confirm('Hapus mata pelajaran ini?')) {
-      await deleteSubject(id);
-      fetchData();
+      const prevSubjects = [...subjects];
+      setSubjects(prev => prev.filter(s => s.id !== id));
+      deleteSubject(id).then(res => {
+        if (res && res.success === false) {
+          setSubjects(prevSubjects);
+        }
+      });
     }
   };
 
@@ -86,19 +112,24 @@ export default function MataPelajaranPage() {
 
   const handleSaveGroup = async (e) => {
     e.preventDefault();
-    if (groupForm.oldName) {
-      await updateSubjectGroup(groupForm.oldName, groupForm.newName);
-    } else {
-      await addSubjectGroup(groupForm.newName);
-    }
+    const oldName = groupForm.oldName;
+    const newName = groupForm.newName;
     setGroupForm({ oldName: '', newName: '' });
-    fetchData(); // refresh groups and subjects (since their group might have changed)
+
+    if (oldName) {
+      setSubjectGroups(prev => prev.map(g => g === oldName ? newName : g));
+      setSubjects(prev => prev.map(s => s.kelompok === oldName ? { ...s, kelompok: newName } : s));
+      updateSubjectGroup(oldName, newName);
+    } else {
+      setSubjectGroups(prev => [...prev, newName]);
+      addSubjectGroup(newName);
+    }
   };
 
   const handleDeleteGroup = async (name) => {
     if (confirm(`Hapus kelompok "${name}"? Pastikan tidak ada mapel di kelompok ini.`)) {
-      await deleteSubjectGroup(name);
-      fetchData();
+      setSubjectGroups(prev => prev.filter(g => g !== name));
+      deleteSubjectGroup(name);
     }
   };
 

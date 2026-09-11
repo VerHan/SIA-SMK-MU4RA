@@ -30,7 +30,7 @@ import { SUBJECT_GROUPS as DEFAULT_SUBJECT_GROUPS, JURUSAN_LIST as DEFAULT_JURUS
 import { getCachedAttendance, setCachedAttendance, getJakartaToday } from './attendanceCache';
 export { getCachedAttendance, setCachedAttendance, getJakartaToday } from './attendanceCache';
 
-const SIMULATE_DELAY = true;
+const SIMULATE_DELAY = false;
 const simulateNetwork = () => SIMULATE_DELAY ? delay(150) : Promise.resolve();
 
 /* ============================================================

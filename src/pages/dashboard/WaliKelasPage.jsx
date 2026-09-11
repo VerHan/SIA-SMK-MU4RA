@@ -151,8 +151,6 @@ export default function WaliKelasPage() {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    setIsSubmitting(true);
-    
     const teacher = teachers.find(t => t.id === formData.teacherId);
     const dataToSave = {
       ...formData,
@@ -160,32 +158,51 @@ export default function WaliKelasPage() {
       totalStudents: parseInt(formData.totalStudents) || 0
     };
 
-    let res;
-    if (editingId) {
-      res = await updateClass(editingId, dataToSave);
-    } else {
-      res = await addClass(dataToSave);
-    }
+    handleCloseModal();
 
-    if (res.success !== false) {
-      setToast({ type: 'success', message: res.message || 'Data kelas berhasil disimpan.' });
-      handleCloseModal();
-      loadData();
+    if (editingId) {
+      // Optimistic update
+      const previousClasses = [...classes];
+      setClasses(prev => prev.map(c => c.id === editingId ? { ...c, ...dataToSave } : c));
+      setToast({ type: 'success', message: 'Data kelas berhasil disimpan.' });
+
+      updateClass(editingId, dataToSave).then(res => {
+        if (res && res.success === false) {
+          setClasses(previousClasses);
+          setToast({ type: 'error', message: res.error || 'Gagal menyimpan perubahan kelas.' });
+        }
+      });
     } else {
-      setToast({ type: 'error', message: res.error || 'Terjadi kesalahan.' });
+      // Optimistic create
+      const tempId = 'cls_' + Date.now();
+      const optimisticClass = { ...dataToSave, id: tempId };
+      setClasses(prev => [optimisticClass, ...prev]);
+      setToast({ type: 'success', message: 'Kelas berhasil ditambahkan.' });
+
+      addClass(dataToSave).then(res => {
+        if (res && res.success !== false) {
+          const persisted = res.data || { ...optimisticClass, id: res.id || tempId };
+          setClasses(prev => prev.map(c => c.id === tempId ? { ...persisted, teacherName: dataToSave.teacherName } : c));
+        } else {
+          setClasses(prev => prev.filter(c => c.id !== tempId));
+          setToast({ type: 'error', message: res?.error || 'Gagal menambahkan kelas.' });
+        }
+      });
     }
-    setIsSubmitting(false);
   };
 
   const handleDelete = async (id) => {
     if (window.confirm('Yakin ingin menghapus kelas ini?')) {
-      const res = await deleteClass(id);
-      if (res.success !== false) {
-        setToast({ type: 'success', message: res.message || 'Kelas berhasil dihapus.' });
-        loadData();
-      } else {
-        setToast({ type: 'error', message: res.error || 'Gagal menghapus kelas.' });
-      }
+      const previousClasses = [...classes];
+      setClasses(prev => prev.filter(c => c.id !== id));
+      setToast({ type: 'success', message: 'Kelas berhasil dihapus.' });
+
+      deleteClass(id).then(res => {
+        if (res && res.success === false) {
+          setClasses(previousClasses);
+          setToast({ type: 'error', message: res.error || 'Gagal menghapus kelas.' });
+        }
+      });
     }
   };
 
@@ -229,38 +246,60 @@ export default function WaliKelasPage() {
       return;
     }
 
-    setMajorSubmitting(true);
-    let res;
-    if (editingMajorId) {
-      res = await updateMajor(editingMajorId, majorForm);
-    } else {
-      res = await addMajor(majorForm);
-    }
+    const cleanKode = majorForm.kode.trim().toUpperCase();
+    const cleanNama = majorForm.nama.trim();
+    const majorData = { ...majorForm, kode: cleanKode, nama: cleanNama };
 
-    setMajorSubmitting(false);
-    if (res.success !== false) {
-      setToast({ type: 'success', message: res.message || 'Jurusan berhasil disimpan.' });
+    if (editingMajorId) {
+      const prevMajors = [...majors];
+      const prevClasses = [...classes];
+      const oldMajor = majors.find(m => m.id === editingMajorId);
+
+      setMajors(prev => prev.map(m => m.id === editingMajorId ? { ...m, ...majorData } : m));
+      if (oldMajor && oldMajor.kode !== cleanKode) {
+        setClasses(prev => prev.map(c => c.major === oldMajor.kode ? { ...c, major: cleanKode } : c));
+      }
       handleCancelEditMajor();
-      const [newMajors, newClasses] = await Promise.all([getMajors(), getClasses()]);
-      setMajors(newMajors);
-      setClasses(newClasses);
-      setMajorTab('list');
+      setToast({ type: 'success', message: 'Jurusan berhasil diperbarui.' });
+
+      updateMajor(editingMajorId, majorData).then(res => {
+        if (res && res.success === false) {
+          setMajors(prevMajors);
+          setClasses(prevClasses);
+          setToast({ type: 'error', message: res.error || 'Gagal menyimpan jurusan.' });
+        }
+      });
     } else {
-      setToast({ type: 'error', message: res.error || 'Gagal menyimpan jurusan.' });
+      const tempId = 'jur_' + Date.now();
+      const newMajorItem = { ...majorData, id: tempId };
+      setMajors(prev => [...prev, newMajorItem]);
+      handleCancelEditMajor();
+      setToast({ type: 'success', message: 'Jurusan berhasil ditambahkan.' });
+
+      addMajor(majorData).then(res => {
+        if (res && res.success !== false) {
+          const persisted = res.data || { ...newMajorItem, id: res.id || tempId };
+          setMajors(prev => prev.map(m => m.id === tempId ? persisted : m));
+        } else {
+          setMajors(prev => prev.filter(m => m.id !== tempId));
+          setToast({ type: 'error', message: res?.error || 'Gagal menambahkan jurusan.' });
+        }
+      });
     }
   };
 
   const handleDeleteMajor = async (id, kode) => {
     if (window.confirm(`Yakin ingin menghapus jurusan "${kode}"?`)) {
-      const res = await deleteMajor(id);
-      if (res.success !== false) {
-        setToast({ type: 'success', message: res.message || 'Jurusan berhasil dihapus.' });
-        const [newMajors, newClasses] = await Promise.all([getMajors(), getClasses()]);
-        setMajors(newMajors);
-        setClasses(newClasses);
-      } else {
-        setToast({ type: 'error', message: res.error || 'Gagal menghapus jurusan.' });
-      }
+      const prevMajors = [...majors];
+      setMajors(prev => prev.filter(m => m.id !== id));
+      setToast({ type: 'success', message: 'Jurusan berhasil dihapus.' });
+
+      deleteMajor(id).then(res => {
+        if (res && res.success === false) {
+          setMajors(prevMajors);
+          setToast({ type: 'error', message: res.error || 'Gagal menghapus jurusan.' });
+        }
+      });
     }
   };
 

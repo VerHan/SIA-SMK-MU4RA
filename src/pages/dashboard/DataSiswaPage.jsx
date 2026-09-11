@@ -72,37 +72,58 @@ export default function DataSiswaPage() {
       return;
     }
 
-    setSubmitting(true);
-    const res = await addStudent(formData);
-    setSubmitting(false);
+    const tempId = 'temp_' + Date.now();
+    const newStudentData = {
+      ...formData,
+      id: tempId,
+      nomor: formData.nomor || '-',
+      nis: formData.nomor || '-'
+    };
 
-    if (res.success) {
-      setToast({ type: 'success', message: res.message || 'Siswa berhasil ditambahkan' });
-      setIsModalOpen(false);
-      setFormData({
-        class: classes[0]?.name || 'X TKJ 1',
-        name: '',
-        phone: '',
-        phone_parent: '',
-        pekerjaan_ortu: '',
-        alamat: '',
-        sekolah_asal: '',
-        nomor: '',
-        gender: 'L',
-      });
-      loadData();
-    } else {
-      setToast({ type: 'error', message: res.error || 'Gagal menambahkan data siswa.' });
-    }
+    // Optimistic UI: langsung tambahkan ke list dan tutup modal seketika
+    setStudents(prev => [newStudentData, ...prev]);
+    setIsModalOpen(false);
+    setToast({ type: 'success', message: 'Siswa berhasil ditambahkan' });
+
+    const submittedData = { ...formData };
+    setFormData({
+      class: classes[0]?.name || 'X TKJ 1',
+      name: '',
+      phone: '',
+      phone_parent: '',
+      pekerjaan_ortu: '',
+      alamat: '',
+      sekolah_asal: '',
+      nomor: '',
+      gender: 'L',
+    });
+
+    // Kirim ke background
+    addStudent(submittedData).then(res => {
+      if (res && res.success) {
+        const persisted = res.student || res.data;
+        if (persisted) {
+          setStudents(prev => prev.map(s => s.id === tempId ? { ...s, id: persisted.id, nomor: persisted.nomor || s.nomor, nis: persisted.nomor || s.nis } : s));
+        }
+      } else {
+        setStudents(prev => prev.filter(s => s.id !== tempId));
+        setToast({ type: 'error', message: res?.error || 'Gagal menambahkan data siswa ke server.' });
+      }
+    });
   };
 
   const handleDelete = async (id, name) => {
     if (window.confirm(`Apakah Anda yakin ingin menghapus siswa "${name}"?`)) {
-      const res = await deleteStudent(id);
-      if (res.success) {
-        setToast({ type: 'success', message: res.message });
-        loadData();
-      }
+      const prevStudents = [...students];
+      setStudents(prev => prev.filter(s => s.id !== id));
+      setToast({ type: 'success', message: `Siswa "${name}" berhasil dihapus` });
+
+      deleteStudent(id).then(res => {
+        if (res && !res.success) {
+          setStudents(prevStudents);
+          setToast({ type: 'error', message: res.error || 'Gagal menghapus siswa' });
+        }
+      });
     }
   };  /* === Fitur Export & Import Excel === */
   const handleExport = () => {

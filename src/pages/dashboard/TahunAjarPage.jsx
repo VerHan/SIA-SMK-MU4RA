@@ -222,48 +222,68 @@ export default function TahunAjarPage() {
       return;
     }
 
-    setSubmitting(true);
-    let res;
-    if (editData) {
-      res = await updateAcademicYear(editData.id, form);
-    } else {
-      res = await addAcademicYear(form);
-    }
+    const payload = { ...form };
+    const isEditing = Boolean(editData);
+    const targetId = editData ? editData.id : `temp-${Date.now()}`;
 
-    setSubmitting(false);
-    if (res.success !== false) {
-      setToast({ type: 'success', message: res.message || 'Data tahun ajar berhasil disimpan!' });
-      setShowModal(false);
-      setEditData(null);
+    // Optimistic UI update: instantly update UI
+    if (isEditing) {
+      setYears(prev => prev.map(y => y.id === targetId ? { ...y, ...payload } : y));
+    } else {
+      setYears(prev => [
+        {
+          id: targetId,
+          ...payload,
+          totalSiswa: 0
+        },
+        ...prev
+      ]);
+    }
+    setShowModal(false);
+    setEditData(null);
+    setToast({ type: 'success', message: 'Data tahun ajar berhasil disimpan!' });
+
+    // Background sync to server
+    const res = isEditing ? await updateAcademicYear(targetId, payload) : await addAcademicYear(payload);
+    if (res && res.success === false) {
+      setToast({ type: 'error', message: res.error || 'Gagal menyimpan data.' });
       fetchData();
     } else {
-      setToast({ type: 'error', message: res.error || 'Gagal menyimpan data.' });
+      const fresh = await getAcademicYears();
+      if (Array.isArray(fresh)) setYears(fresh);
     }
   };
 
   const handleDelete = async (id, nama, semester) => {
     if (confirm(`Yakin ingin menghapus Tahun Ajar ${nama} Semester ${semester}?`)) {
+      // Optimistic delete
+      setYears(prev => prev.filter(y => y.id !== id));
+      setToast({ type: 'success', message: 'Tahun ajar berhasil dihapus.' });
+
       const res = await deleteAcademicYear(id);
-      if (res.success !== false) {
-        setToast({ type: 'success', message: res.message || 'Tahun ajar berhasil dihapus.' });
-        fetchData();
-      } else {
+      if (res && res.success === false) {
         setToast({ type: 'error', message: res.error || 'Gagal menghapus tahun ajar.' });
+        fetchData();
       }
     }
   };
 
   const handleSetActive = async (year) => {
     if (confirm(`Aktifkan Tahun Ajaran ${year.nama} - Semester ${year.semester} sebagai periode aktif sekolah?`)) {
+      // Optimistic UI update: instantly switch active flag in state
+      setYears(prev => prev.map(y => ({
+        ...y,
+        isActive: y.id === year.id
+      })));
+      setToast({
+        type: 'success',
+        message: `Tahun Ajaran ${year.nama} Semester ${year.semester} berhasil diaktifkan!`
+      });
+
       const res = await setActiveAcademicYear(year.id);
-      if (res.success !== false) {
-        setToast({
-          type: 'success',
-          message: `Tahun Ajaran ${year.nama} Semester ${year.semester} berhasil diaktifkan!`
-        });
-        fetchData();
-      } else {
+      if (res && res.success === false) {
         setToast({ type: 'error', message: res.error || 'Gagal mengubah tahun ajar aktif.' });
+        fetchData();
       }
     }
   };

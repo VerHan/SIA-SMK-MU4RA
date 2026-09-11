@@ -521,7 +521,20 @@ app.delete('/api/guru/:id', async (req, res) => {
 app.get('/api/siswa', async (req, res) => {
   try {
     const { kelas } = req.query;
+    let whereCondition = {};
+    if (kelas) {
+      whereCondition = {
+        riwayatKelas: {
+          some: {
+            kelas: { name: kelas },
+            tahunAjar: { isActive: true }
+          }
+        }
+      };
+    }
+
     const siswaList = await prisma.siswa.findMany({
+      where: whereCondition,
       include: {
         riwayatKelas: {
           include: { kelas: true, tahunAjar: true },
@@ -549,11 +562,7 @@ app.get('/api/siswa', async (req, res) => {
       };
     });
 
-    if (kelas) {
-      res.json(mapped.filter(s => s.class === kelas));
-    } else {
-      res.json(mapped);
-    }
+    res.json(mapped);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -1102,13 +1111,14 @@ app.post('/api/absensi-mapel', async (req, res) => {
 
     const activeTa = await prisma.tahunAjar.findFirst({ where: { isActive: true } });
 
-    for (const record of records) {
-      await prisma.absensiMapel.upsert({
+    const operations = records.map(record => {
+      const recordDate = new Date(record.date);
+      return prisma.absensiMapel.upsert({
         where: {
           studentId_mapelId_date_jamKe: {
             studentId: record.studentId,
             mapelId: record.mapelId || record.subjectId,
-            date: new Date(record.date),
+            date: recordDate,
             jamKe: record.jamKe
           }
         },
@@ -1123,12 +1133,14 @@ app.post('/api/absensi-mapel', async (req, res) => {
           guruId: record.guruId || record.teacherId,
           kelasName: record.class || record.kelasName || '-',
           tahunAjarId: activeTa?.id || null,
-          date: new Date(record.date),
+          date: recordDate,
           jamKe: record.jamKe,
           status: record.status
         }
       });
-    }
+    });
+
+    await prisma.$transaction(operations);
 
     res.json({ success: true, message: 'Absensi mapel berhasil disimpan.' });
   } catch (err) {
