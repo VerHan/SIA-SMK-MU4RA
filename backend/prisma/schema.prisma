@@ -109,6 +109,16 @@ model Kelas {
   riwayatKelas  RiwayatKelas[]
 }
 
+model Jurusan {
+  id          String   @id @default(uuid())
+  kode        String   @unique // Contoh: "TKJ", "RPL", "DKV"
+  nama        String   // Contoh: "Teknik Komputer & Jaringan"
+  deskripsi   String?
+  color       String?  @default("#3B82F6")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
 model MataPelajaran {
   id       String   @id @default(uuid())
   kode     String   @unique

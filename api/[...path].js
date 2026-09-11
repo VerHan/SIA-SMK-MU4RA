@@ -852,6 +852,124 @@ app.delete('/api/kelas/:id', async (req, res) => {
 });
 
 // ==========================================
+// 7.1 JURUSAN / PROGRAM KEAHLIAN (CRUD)
+// ==========================================
+
+app.get('/api/jurusan', async (req, res) => {
+  try {
+    let list = await prisma.jurusan.findMany({ orderBy: { kode: 'asc' } });
+    if (list.length === 0) {
+      const defaults = [
+        { kode: 'TKJ', nama: 'Teknik Komputer & Jaringan', color: '#3B82F6', deskripsi: 'Jaringan komputer, server, dan infrastruktur IT' },
+        { kode: 'RPL', nama: 'Rekayasa Perangkat Lunak', color: '#10B981', deskripsi: 'Pemrograman software, aplikasi web & mobile' },
+        { kode: 'TBSM', nama: 'Teknik Bisnis Sepeda Motor', color: '#F59E0B', deskripsi: 'Teknik mesin, otomotif, dan bengkel sepeda motor' },
+        { kode: 'AKL', nama: 'Akuntansi & Keuangan Lembaga', color: '#8B5CF6', deskripsi: 'Akuntansi, perpajakan, dan keuangan lembaga' },
+      ];
+      for (const d of defaults) {
+        await prisma.jurusan.create({ data: d }).catch(() => null);
+      }
+      list = await prisma.jurusan.findMany({ orderBy: { kode: 'asc' } });
+    }
+    res.json(list);
+  } catch (err) {
+    console.error('Error getting jurusan:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/jurusan', async (req, res) => {
+  try {
+    const { kode, nama, deskripsi, color } = req.body;
+    const cleanKode = (kode || '').trim().toUpperCase();
+    const cleanNama = (nama || '').trim();
+    if (!cleanKode || !cleanNama) {
+      return res.status(400).json({ success: false, error: 'Kode dan Nama Jurusan wajib diisi' });
+    }
+    const existing = await prisma.jurusan.findUnique({ where: { kode: cleanKode } }).catch(() => null);
+    if (existing) {
+      return res.status(400).json({ success: false, error: `Jurusan dengan kode "${cleanKode}" sudah ada.` });
+    }
+    const created = await prisma.jurusan.create({
+      data: {
+        kode: cleanKode,
+        nama: cleanNama,
+        deskripsi: deskripsi ? deskripsi.trim() : null,
+        color: color || '#3B82F6'
+      }
+    });
+    res.json({ success: true, data: created, message: 'Jurusan berhasil ditambahkan' });
+  } catch (err) {
+    console.error('Error adding jurusan:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.put('/api/jurusan/:id', async (req, res) => {
+  const { id } = req.params;
+  try {
+    const { kode, nama, deskripsi, color } = req.body;
+    const cleanKode = (kode || '').trim().toUpperCase();
+    const cleanNama = (nama || '').trim();
+    if (!cleanKode || !cleanNama) {
+      return res.status(400).json({ success: false, error: 'Kode dan Nama Jurusan wajib diisi' });
+    }
+
+    const existing = await prisma.jurusan.findUnique({ where: { kode: cleanKode } }).catch(() => null);
+    if (existing && existing.id !== id) {
+      return res.status(400).json({ success: false, error: `Kode jurusan "${cleanKode}" sudah digunakan oleh jurusan lain.` });
+    }
+
+    const old = await prisma.jurusan.findUnique({ where: { id } }).catch(() => null);
+
+    const updated = await prisma.jurusan.update({
+      where: { id },
+      data: {
+        kode: cleanKode,
+        nama: cleanNama,
+        deskripsi: deskripsi ? deskripsi.trim() : null,
+        color: color || '#3B82F6'
+      }
+    });
+
+    if (old && old.kode !== cleanKode) {
+      await prisma.kelas.updateMany({
+        where: { major: old.kode },
+        data: { major: cleanKode }
+      }).catch(() => null);
+    }
+
+    res.json({ success: true, data: updated, message: 'Jurusan berhasil diperbarui' });
+  } catch (err) {
+    console.error('Error updating jurusan:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.delete('/api/jurusan/:id', async (req, res) => {
+  const { id } = req.params;
+  try {
+    const target = await prisma.jurusan.findUnique({ where: { id } });
+    if (!target) {
+      return res.status(404).json({ success: false, error: 'Jurusan tidak ditemukan' });
+    }
+
+    const classCount = await prisma.kelas.count({ where: { major: target.kode } });
+    if (classCount > 0) {
+      return res.status(400).json({
+        success: false,
+        error: `Jurusan "${target.kode}" tidak dapat dihapus karena masih digunakan oleh ${classCount} kelas.`
+      });
+    }
+
+    await prisma.jurusan.delete({ where: { id } });
+    res.json({ success: true, message: 'Jurusan berhasil dihapus' });
+  } catch (err) {
+    console.error('Error deleting jurusan:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ==========================================
 // 8. TAHUN AJAR (CRUD)
 // ==========================================
 

@@ -26,7 +26,7 @@ import {
   MOCK_STUDENT_ATTITUDE
 } from './mockData';
 import { delay, generateId } from '../utils/helpers';
-import { SUBJECT_GROUPS as DEFAULT_SUBJECT_GROUPS } from '../config/constants';
+import { SUBJECT_GROUPS as DEFAULT_SUBJECT_GROUPS, JURUSAN_LIST as DEFAULT_JURUSAN_LIST } from '../config/constants';
 import { getCachedAttendance, setCachedAttendance, getJakartaToday } from './attendanceCache';
 export { getCachedAttendance, setCachedAttendance, getJakartaToday } from './attendanceCache';
 
@@ -41,6 +41,13 @@ let academicYearsList = [...MOCK_ACADEMIC_YEARS];
 let subjectsList = [...MOCK_SUBJECTS];
 let subjectTeachersList = [...MOCK_SUBJECT_TEACHERS];
 let subjectGroupsList = [...DEFAULT_SUBJECT_GROUPS];
+let majorsList = (DEFAULT_JURUSAN_LIST || []).map(j => ({
+  id: j.id,
+  kode: j.shortName,
+  nama: j.name,
+  deskripsi: j.description || '',
+  color: j.color || '#3B82F6'
+}));
 let teacherDutiesList = [...MOCK_TEACHER_DUTIES];
 let dutyScheduleList = [...MOCK_DUTY_SCHEDULE];
 let teacherAttendanceList = [...MOCK_TEACHER_ATTENDANCE];
@@ -797,6 +804,128 @@ export async function deleteClass(id) {
   await simulateNetwork();
   classesList = classesList.filter(c => c.id !== id);
   return { success: true, message: 'Kelas berhasil dihapus (Tersimpan).' };
+}
+
+
+/* ============================================================
+   JURUSAN / PROGRAM KEAHLIAN (CRUD)
+   ============================================================ */
+export async function getMajors() {
+  try {
+    const res = await fetch('/api/jurusan');
+    const contentType = res.headers.get('content-type');
+    if (res.ok && contentType && contentType.includes('application/json')) {
+      const data = await res.json();
+      if (Array.isArray(data) && data.length > 0) {
+        majorsList = data;
+        return [...majorsList];
+      }
+    }
+  } catch (e) { console.error('Failed to get majors', e); }
+  return [...majorsList];
+}
+
+export async function addMajor(data) {
+  try {
+    const res = await fetch('/api/jurusan', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data)
+    });
+    const contentType = res.headers.get('content-type');
+    if (contentType && contentType.includes('application/json')) {
+      const result = await res.json();
+      if (res.ok && result.success !== false) {
+        const saved = result.data || { ...data, id: generateId() };
+        majorsList.push(saved);
+        return result;
+      }
+      if (result.error || result.message) return { success: false, error: result.error || result.message };
+    }
+    if (res.ok) return await res.json();
+  } catch (e) { console.warn('Backend addMajor failed, fallback to mock:', e); }
+
+  await simulateNetwork();
+  const cleanKode = (data.kode || '').trim().toUpperCase();
+  const cleanNama = (data.nama || '').trim();
+  if (majorsList.some(m => m.kode.toUpperCase() === cleanKode)) {
+    return { success: false, error: `Jurusan dengan kode "${cleanKode}" sudah ada.` };
+  }
+  const newMajor = {
+    id: generateId(),
+    kode: cleanKode,
+    nama: cleanNama,
+    deskripsi: data.deskripsi || '',
+    color: data.color || '#3B82F6'
+  };
+  majorsList.push(newMajor);
+  return { success: true, data: newMajor, message: 'Jurusan berhasil ditambahkan (Tersimpan).' };
+}
+
+export async function updateMajor(id, data) {
+  try {
+    const res = await fetch(`/api/jurusan/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data)
+    });
+    const contentType = res.headers.get('content-type');
+    if (contentType && contentType.includes('application/json')) {
+      const result = await res.json();
+      if (res.ok && result.success !== false) {
+        const idx = majorsList.findIndex(m => m.id === id);
+        if (idx !== -1) majorsList[idx] = { ...majorsList[idx], ...data };
+        return result;
+      }
+      if (result.error || result.message) return { success: false, error: result.error || result.message };
+    }
+    if (res.ok) return await res.json();
+  } catch (e) { console.warn('Backend updateMajor failed, fallback to mock:', e); }
+
+  await simulateNetwork();
+  const cleanKode = (data.kode || '').trim().toUpperCase();
+  const cleanNama = (data.nama || '').trim();
+  const idx = majorsList.findIndex(m => m.id === id);
+  if (idx !== -1) {
+    const oldKode = majorsList[idx].kode;
+    majorsList[idx] = { ...majorsList[idx], ...data, kode: cleanKode, nama: cleanNama };
+    if (oldKode !== cleanKode) {
+      classesList = classesList.map(c => c.major === oldKode ? { ...c, major: cleanKode } : c);
+    }
+    return { success: true, message: 'Jurusan berhasil diperbarui (Tersimpan).' };
+  }
+  return { success: false, error: 'Jurusan tidak ditemukan.' };
+}
+
+export async function deleteMajor(id) {
+  try {
+    const res = await fetch(`/api/jurusan/${id}`, { method: 'DELETE' });
+    const contentType = res.headers.get('content-type');
+    if (contentType && contentType.includes('application/json')) {
+      const result = await res.json();
+      if (res.ok && result.success !== false) {
+        majorsList = majorsList.filter(m => m.id !== id);
+        return result;
+      }
+      if (result.error || result.message) return { success: false, error: result.error || result.message };
+    }
+    if (res.ok) return await res.json();
+  } catch (e) { console.warn('Backend deleteMajor failed, fallback to mock:', e); }
+
+  await simulateNetwork();
+  const target = majorsList.find(m => m.id === id);
+  if (!target) return { success: false, error: 'Jurusan tidak ditemukan.' };
+
+  const classCount = classesList.filter(c => c.major === target.kode).length;
+  if (classCount > 0) {
+    return {
+      success: false,
+      error: `Jurusan "${target.kode}" tidak dapat dihapus karena masih digunakan oleh ${classCount} kelas.`
+    };
+  }
+
+  majorsList = majorsList.filter(m => m.id !== id);
+  return { success: true, message: 'Jurusan berhasil dihapus (Tersimpan).' };
 }
 
 
