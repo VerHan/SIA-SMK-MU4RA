@@ -166,23 +166,27 @@ export default function TahunAjarPage() {
     let sDate = '2024-07-15';
     let eDate = '2024-12-20';
 
-    if (activeYear) {
+    if (activeYear && activeYear.nama) {
       if (activeYear.semester === 1) {
         defaultNama = activeYear.nama;
         defaultSem = 2;
-        const [y1, y2] = activeYear.nama.split('/').map(s => s.trim());
-        const targetYear = y2 ? (y2.length === 2 ? `20${y2}` : y2) : y1;
-        sDate = `${targetYear}-01-06`;
-        eDate = `${targetYear}-06-20`;
+        if (activeYear.nama.includes('/')) {
+          const [y1, y2] = activeYear.nama.split('/').map(s => s.trim());
+          const targetYear = y2 ? (y2.length === 2 ? `20${y2}` : y2) : y1;
+          sDate = `${targetYear}-01-06`;
+          eDate = `${targetYear}-06-20`;
+        }
       } else {
-        const parts = activeYear.nama.split('/');
-        if (parts.length === 2) {
-          const n1 = parseInt(parts[0], 10);
-          const n2 = parseInt(parts[1], 10);
-          if (!isNaN(n1) && !isNaN(n2)) {
-            defaultNama = `${n1 + 1}/${n2 + 1}`;
-            sDate = `${n1 + 1}-07-15`;
-            eDate = `${n1 + 1}-12-20`;
+        if (activeYear.nama.includes('/')) {
+          const parts = activeYear.nama.split('/');
+          if (parts.length === 2) {
+            const n1 = parseInt(parts[0], 10);
+            const n2 = parseInt(parts[1], 10);
+            if (!isNaN(n1) && !isNaN(n2)) {
+              defaultNama = `${n1 + 1}/${n2 + 1}`;
+              sDate = `${n1 + 1}-07-15`;
+              eDate = `${n1 + 1}-12-20`;
+            }
           }
         }
         defaultSem = 1;

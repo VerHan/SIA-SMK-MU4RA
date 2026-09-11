@@ -6,13 +6,23 @@
    - Safe offline fallback
    ============================================================ */
 
-const CACHE_NAME = 'sia-smk-mu4ra-v2';
+const CACHE_NAME = 'sia-smk-mu4ra-v3';
 
 /* Assets static offline baseline */
 const STATIC_ASSETS = [
   '/manifest.json',
   '/favicon.svg',
 ];
+
+/* Message listener for immediate cache clearing & update control */
+self.addEventListener('message', (event) => {
+  if (event.data && event.data.type === 'SKIP_WAITING') {
+    self.skipWaiting();
+  }
+  if (event.data && event.data.type === 'CLEAR_CACHE') {
+    caches.keys().then(keys => Promise.all(keys.map(k => caches.delete(k))));
+  }
+});
 
 /* Install — skip waiting immediately */
 self.addEventListener('install', (event) => {
@@ -44,6 +54,11 @@ self.addEventListener('fetch', (event) => {
   if (request.method !== 'GET' || !request.url.startsWith('http')) return;
 
   const url = new URL(request.url);
+
+  /* 0. Khusus Rute Admin Dashboard (/dashboard/*) -> Bypassed sepenuhnya dari Service Worker agar selalu live dari server */
+  if (url.pathname.startsWith('/dashboard')) {
+    return;
+  }
 
   /* 1. API Requests -> Network First */
   if (url.pathname.startsWith('/api/')) {

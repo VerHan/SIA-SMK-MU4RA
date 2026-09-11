@@ -202,17 +202,18 @@ export default function DataSiswaPage() {
 
   /* Filter list */
   const filteredStudents = students.filter(s => {
-    const sGrade = s.class.split(' ')[0]; // 'X', 'XI', 'XII'
+    const sClass = s.class || '';
+    const sGrade = sClass ? sClass.split(' ')[0] : ''; // 'X', 'XI', 'XII'
     const matchGrade = selectedGrade === 'Semua' || sGrade === selectedGrade;
-    const matchClass = selectedClass === 'Semua' || s.class === selectedClass;
-    const matchSearch = s.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+    const matchClass = selectedClass === 'Semua' || sClass === selectedClass;
+    const matchSearch = (s.name || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
                         (s.nomor && s.nomor.includes(searchQuery));
     return matchSearch && matchGrade && matchClass;
   });
 
   const availableClasses = classes.filter(c => {
     if (selectedGrade === 'Semua') return true;
-    return c.name.split(' ')[0] === selectedGrade;
+    return (c.name || '').split(' ')[0] === selectedGrade;
   });
 
   const columns = [
@@ -261,7 +262,7 @@ export default function DataSiswaPage() {
             accept=".xlsx, .xls, .csv"
             style={{ display: 'none' }}
             ref={fileInputRef}
-            onChange={handleImport}
+            onChange={handleImportExcel}
           />
           <Button variant="outline" onClick={() => fileInputRef.current?.click()} size="sm">
             ⬇️ Import Excel

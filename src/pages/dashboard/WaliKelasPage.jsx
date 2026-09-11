@@ -130,7 +130,7 @@ export default function WaliKelasPage() {
 
     let newMajor = formData.major;
     for (const m of majors) {
-      if (upper.includes(m.kode.toUpperCase())) {
+      if (m?.kode && upper.includes(m.kode.toUpperCase())) {
         newMajor = m.kode;
         break;
       }
