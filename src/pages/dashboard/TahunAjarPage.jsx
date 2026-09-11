@@ -291,19 +291,16 @@ export default function TahunAjarPage() {
           <h1 style={{
             fontSize: 'var(--font-size-2xl)',
             fontWeight: 'var(--font-weight-extrabold)',
-            marginBottom: '4px',
-            display: 'flex',
-            alignItems: 'center',
-            gap: 'var(--space-2)'
+            marginBottom: '4px'
           }}>
-            🗓️ Manajemen Tahun Ajaran & Semester
+            Manajemen Tahun Ajaran & Semester
           </h1>
           <p style={{ color: 'var(--color-text-secondary)', fontSize: 'var(--font-size-sm)' }}>
             Atur periode aktif kalender belajar mengajar, pembagian semester, dan arsip tahun akademik.
           </p>
         </div>
-        <Button onClick={handleOpenAddModal} style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-          <span>➕</span> Tambah Tahun Ajar
+        <Button onClick={handleOpenAddModal}>
+          Tambah Tahun Ajar
         </Button>
       </div>
 
@@ -413,7 +410,7 @@ export default function TahunAjarPage() {
                             border: '1px solid #A7F3D0',
                             padding: '3px 10px'
                           }}>
-                            🟢 Aktif Berjalan
+                            Aktif Berjalan
                           </Badge>
                           <Badge variant="primary" size="sm">
                             Semester {activeYear.semester} ({activeYear.semester === 1 ? 'Ganjil' : 'Genap'})
@@ -436,9 +433,8 @@ export default function TahunAjarPage() {
                         size="sm"
                         variant="secondary"
                         onClick={() => handleEdit(activeYear)}
-                        style={{ display: 'flex', alignItems: 'center', gap: '4px' }}
                       >
-                        ✏️ Edit Periode
+                        Edit Periode
                       </Button>
                     </div>
                   </div>
@@ -454,80 +450,32 @@ export default function TahunAjarPage() {
                     border: '1px solid rgba(16, 185, 129, 0.2)'
                   }}>
                     {/* Tanggal Mulai */}
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)' }}>
-                      <div style={{
-                        width: '40px',
-                        height: '40px',
-                        borderRadius: 'var(--radius-md)',
-                        background: 'rgba(59, 130, 246, 0.1)',
-                        color: '#2563EB',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        fontSize: '1.2rem',
-                        flexShrink: 0
-                      }}>
-                        📅
+                    <div>
+                      <div style={{ fontSize: 'var(--font-size-xs)', color: 'var(--color-text-muted)', fontWeight: 'var(--font-weight-medium)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                        Tanggal Mulai
                       </div>
-                      <div>
-                        <div style={{ fontSize: 'var(--font-size-xs)', color: 'var(--color-text-muted)', fontWeight: 'var(--font-weight-medium)' }}>
-                          Tanggal Mulai
-                        </div>
-                        <div style={{ fontSize: 'var(--font-size-sm)', fontWeight: 'var(--font-weight-bold)', color: 'var(--color-text)' }}>
-                          {formatIndoDate(activeYear.startDate)}
-                        </div>
+                      <div style={{ fontSize: 'var(--font-size-base)', fontWeight: 'var(--font-weight-bold)', color: 'var(--color-text)', marginTop: '2px' }}>
+                        {formatIndoDate(activeYear.startDate)}
                       </div>
                     </div>
 
                     {/* Tanggal Selesai */}
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)' }}>
-                      <div style={{
-                        width: '40px',
-                        height: '40px',
-                        borderRadius: 'var(--radius-md)',
-                        background: 'rgba(239, 68, 68, 0.1)',
-                        color: '#DC2626',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        fontSize: '1.2rem',
-                        flexShrink: 0
-                      }}>
-                        🏁
+                    <div>
+                      <div style={{ fontSize: 'var(--font-size-xs)', color: 'var(--color-text-muted)', fontWeight: 'var(--font-weight-medium)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                        Tanggal Selesai (Akhir)
                       </div>
-                      <div>
-                        <div style={{ fontSize: 'var(--font-size-xs)', color: 'var(--color-text-muted)', fontWeight: 'var(--font-weight-medium)' }}>
-                          Tanggal Selesai (Akhir)
-                        </div>
-                        <div style={{ fontSize: 'var(--font-size-sm)', fontWeight: 'var(--font-weight-bold)', color: 'var(--color-text)' }}>
-                          {formatIndoDate(activeYear.endDate)}
-                        </div>
+                      <div style={{ fontSize: 'var(--font-size-base)', fontWeight: 'var(--font-weight-bold)', color: 'var(--color-text)', marginTop: '2px' }}>
+                        {formatIndoDate(activeYear.endDate)}
                       </div>
                     </div>
 
                     {/* Total Estimasi Durasi */}
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)' }}>
-                      <div style={{
-                        width: '40px',
-                        height: '40px',
-                        borderRadius: 'var(--radius-md)',
-                        background: 'rgba(16, 185, 129, 0.1)',
-                        color: '#059669',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        fontSize: '1.2rem',
-                        flexShrink: 0
-                      }}>
-                        ⏱️
+                    <div>
+                      <div style={{ fontSize: 'var(--font-size-xs)', color: 'var(--color-text-muted)', fontWeight: 'var(--font-weight-medium)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                        Durasi Periode
                       </div>
-                      <div>
-                        <div style={{ fontSize: 'var(--font-size-xs)', color: 'var(--color-text-muted)', fontWeight: 'var(--font-weight-medium)' }}>
-                          Durasi Periode
-                        </div>
-                        <div style={{ fontSize: 'var(--font-size-sm)', fontWeight: 'var(--font-weight-bold)', color: '#059669' }}>
-                          {activeMetrics ? `± ${activeMetrics.totalMonths} Bulan (${activeMetrics.totalDays} Hari)` : '-'}
-                        </div>
+                      <div style={{ fontSize: 'var(--font-size-base)', fontWeight: 'var(--font-weight-bold)', color: '#059669', marginTop: '2px' }}>
+                        {activeMetrics ? `${activeMetrics.totalMonths} Bulan (${activeMetrics.totalDays} Hari)` : '-'}
                       </div>
                     </div>
                   </div>
@@ -548,7 +496,7 @@ export default function TahunAjarPage() {
                         marginBottom: '6px'
                       }}>
                         <span style={{ fontWeight: 'var(--font-weight-semibold)', color: 'var(--color-text-secondary)' }}>
-                          📊 Status Semester: {activeMetrics.summary}
+                          Status Semester: {activeMetrics.summary}
                         </span>
                         <span style={{ fontWeight: 'var(--font-weight-bold)', color: '#059669' }}>
                           {activeMetrics.percent}%
@@ -579,15 +527,14 @@ export default function TahunAjarPage() {
             /* Warning jika belum ada yang diset aktif */
             <Card style={{
               background: '#FFFBEB',
-              border: '2px dashed #F59E0B',
+              border: '1px solid #F59E0B',
               textAlign: 'center',
               padding: 'var(--space-6)'
             }}>
-              <div style={{ fontSize: '2rem', marginBottom: '8px' }}>⚠️</div>
-              <h3 style={{ fontSize: 'var(--font-size-base)', fontWeight: 'var(--font-weight-bold)', color: '#92400E' }}>
-                Belum Ada Tahun Ajaran yang Aktif!
+              <h3 style={{ fontSize: 'var(--font-size-base)', fontWeight: 'var(--font-weight-bold)', color: '#92400E', margin: 0 }}>
+                Belum Ada Tahun Ajaran yang Aktif
               </h3>
-              <p style={{ fontSize: 'var(--font-size-sm)', color: '#B45309', maxWidth: '500px', margin: '4px auto var(--space-4)' }}>
+              <p style={{ fontSize: 'var(--font-size-sm)', color: '#B45309', maxWidth: '500px', margin: '6px auto var(--space-4)' }}>
                 Sistem membutuhkan satu tahun ajaran aktif untuk menghitung presensi, jadwal mata pelajaran, dan rekap nilai. Silakan klik tombol <b>"Set Sebagai Aktif"</b> pada salah satu tahun ajaran di bawah.
               </p>
             </Card>
@@ -605,12 +552,9 @@ export default function TahunAjarPage() {
             }}>
               <h2 style={{
                 fontSize: 'var(--font-size-base)',
-                fontWeight: 'var(--font-weight-bold)',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '8px'
+                fontWeight: 'var(--font-weight-bold)'
               }}>
-                📚 Riwayat & Pilihan Tahun Ajar Lainnya ({inactiveYears.length})
+                Riwayat & Pilihan Tahun Ajar Lainnya ({inactiveYears.length})
               </h2>
               <span style={{ fontSize: 'var(--font-size-xs)', color: 'var(--color-text-muted)' }}>
                 Tahun ajaran non-aktif / arsip sebelumnya
@@ -686,9 +630,9 @@ export default function TahunAjarPage() {
                           flexWrap: 'wrap',
                           gap: '6px'
                         }}>
-                          <span>📅 <b>Mulai:</b> {formatIndoDate(year.startDate)}</span>
+                          <span><b>Mulai:</b> {formatIndoDate(year.startDate)}</span>
                           <span style={{ color: 'var(--color-text-muted)' }}>•</span>
-                          <span>🏁 <b>Selesai:</b> {formatIndoDate(year.endDate)}</span>
+                          <span><b>Selesai:</b> {formatIndoDate(year.endDate)}</span>
                           {metrics && (
                             <>
                               <span style={{ color: 'var(--color-text-muted)' }}>•</span>
@@ -706,14 +650,11 @@ export default function TahunAjarPage() {
                         variant="primary"
                         onClick={() => handleSetActive(year)}
                         style={{
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: '4px',
                           background: 'linear-gradient(135deg, #10B981, #059669)',
                           border: 'none'
                         }}
                       >
-                        ⭐ Set Sebagai Aktif
+                        Set Sebagai Aktif
                       </Button>
                       <Button size="sm" variant="secondary" onClick={() => handleEdit(year)}>
                         Edit

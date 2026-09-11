@@ -49,6 +49,7 @@ export default function Button({
 
   /* Size styles */
   const sizes = {
+    xs: { padding: '0.25rem 0.65rem', fontSize: 'var(--font-size-xs)' },
     sm: { padding: '0.4rem 0.85rem', fontSize: 'var(--font-size-sm)' },
     md: { padding: '0.6rem 1.25rem', fontSize: 'var(--font-size-base)' },
     lg: { padding: '0.75rem 1.75rem', fontSize: 'var(--font-size-lg)' },

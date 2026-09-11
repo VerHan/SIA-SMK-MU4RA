@@ -2,9 +2,9 @@
    WaliKelasPage — Data Kelas, Wali Kelas & Manajemen Jurusan Sekolah
    
    Fitur:
-   - CRUD Kelas & Wali Kelas
-   - Kelola Jurusan Sekolah (Tambah, Edit, Hapus Program Keahlian / Jurusan)
-   - Dropdown Jurusan Dinamis berdasarkan Jurusan yang didaftarkan Sekolah
+   - CRUD Data Kelas & Wali Kelas
+   - Kelola Program Keahlian / Jurusan Sekolah
+   - Dropdown Jurusan Dinamis berdasarkan Jurusan Terdaftar
    - Filter Kelas berdasarkan Tingkat & Jurusan
    - Smart Auto-detection Tingkat & Jurusan saat mengetik Nama Kelas
    ============================================================ */
@@ -29,6 +29,18 @@ import Button from '../../components/ui/Button';
 import Modal from '../../components/ui/Modal';
 import Toast from '../../components/ui/Toast';
 
+// Pilihan warna preset profesional untuk label jurusan
+const PRESET_COLORS = [
+  { label: 'Biru', value: '#2563EB' },
+  { label: 'Hijau Zamrud', value: '#059669' },
+  { label: 'Kuning Amber', value: '#D97706' },
+  { label: 'Ungu', value: '#7C3AED' },
+  { label: 'Merah Ruby', value: '#DC2626' },
+  { label: 'Cyan', value: '#0891B2' },
+  { label: 'Indigo', value: '#4F46E5' },
+  { label: 'Slate', value: '#475569' },
+];
+
 export default function WaliKelasPage() {
   const [classes, setClasses] = useState([]);
   const [teachers, setTeachers] = useState([]);
@@ -52,13 +64,14 @@ export default function WaliKelasPage() {
 
   // Modal State - Kelola Jurusan
   const [isMajorModalOpen, setIsMajorModalOpen] = useState(false);
+  const [majorTab, setMajorTab] = useState('list'); // 'list' | 'form'
   const [editingMajorId, setEditingMajorId] = useState(null);
   const [majorSubmitting, setMajorSubmitting] = useState(false);
   const [majorForm, setMajorForm] = useState({
     kode: '',
     nama: '',
     deskripsi: '',
-    color: '#3B82F6'
+    color: '#2563EB'
   });
 
   const loadData = async () => {
@@ -73,7 +86,6 @@ export default function WaliKelasPage() {
     const loadedMajors = Array.isArray(jurusanData) ? jurusanData : [];
     setMajors(loadedMajors);
     
-    // Set default major in formData jika belum ada
     if (loadedMajors.length > 0 && !formData.major) {
       setFormData(prev => ({ ...prev, major: loadedMajors[0].kode }));
     }
@@ -116,7 +128,6 @@ export default function WaliKelasPage() {
     else if (upper.startsWith('XI') || upper.includes(' 11') || upper.includes(' XI')) newGrade = 'XI';
     else if (upper.startsWith('X') || upper.includes(' 10') || upper.includes(' X')) newGrade = 'X';
 
-    // Cari kecocokan dengan daftar jurusan yang ada di sekolah
     let newMajor = formData.major;
     for (const m of majors) {
       if (upper.includes(m.kode.toUpperCase())) {
@@ -157,7 +168,7 @@ export default function WaliKelasPage() {
     }
 
     if (res.success !== false) {
-      setToast({ type: 'success', message: res.message || 'Data kelas berhasil disimpan!' });
+      setToast({ type: 'success', message: res.message || 'Data kelas berhasil disimpan.' });
       handleCloseModal();
       loadData();
     } else {
@@ -183,8 +194,15 @@ export default function WaliKelasPage() {
   // ==========================================
   const handleOpenMajorModal = () => {
     setEditingMajorId(null);
-    setMajorForm({ kode: '', nama: '', deskripsi: '', color: '#3B82F6' });
+    setMajorForm({ kode: '', nama: '', deskripsi: '', color: '#2563EB' });
+    setMajorTab('list');
     setIsMajorModalOpen(true);
+  };
+
+  const handleAddNewMajorClick = () => {
+    setEditingMajorId(null);
+    setMajorForm({ kode: '', nama: '', deskripsi: '', color: '#2563EB' });
+    setMajorTab('form');
   };
 
   const handleEditMajor = (jurusan) => {
@@ -193,19 +211,21 @@ export default function WaliKelasPage() {
       kode: jurusan.kode,
       nama: jurusan.nama,
       deskripsi: jurusan.deskripsi || '',
-      color: jurusan.color || '#3B82F6'
+      color: jurusan.color || '#2563EB'
     });
+    setMajorTab('form');
   };
 
   const handleCancelEditMajor = () => {
     setEditingMajorId(null);
-    setMajorForm({ kode: '', nama: '', deskripsi: '', color: '#3B82F6' });
+    setMajorForm({ kode: '', nama: '', deskripsi: '', color: '#2563EB' });
+    setMajorTab('list');
   };
 
   const handleMajorSubmit = async (e) => {
     e.preventDefault();
     if (!majorForm.kode.trim() || !majorForm.nama.trim()) {
-      setToast({ type: 'error', message: 'Kode dan Nama jurusan wajib diisi.' });
+      setToast({ type: 'error', message: 'Kode dan nama jurusan wajib diisi.' });
       return;
     }
 
@@ -219,12 +239,12 @@ export default function WaliKelasPage() {
 
     setMajorSubmitting(false);
     if (res.success !== false) {
-      setToast({ type: 'success', message: res.message || 'Jurusan berhasil disimpan!' });
+      setToast({ type: 'success', message: res.message || 'Jurusan berhasil disimpan.' });
       handleCancelEditMajor();
-      // Refresh data
       const [newMajors, newClasses] = await Promise.all([getMajors(), getClasses()]);
       setMajors(newMajors);
       setClasses(newClasses);
+      setMajorTab('list');
     } else {
       setToast({ type: 'error', message: res.error || 'Gagal menyimpan jurusan.' });
     }
@@ -261,7 +281,7 @@ export default function WaliKelasPage() {
       header: 'Jurusan',
       render: (row) => {
         const majorObj = majors.find(m => m.kode === row.major);
-        const color = majorObj?.color || '#3B82F6';
+        const color = majorObj?.color || '#2563EB';
         return (
           <span style={{
             display: 'inline-flex',
@@ -270,10 +290,10 @@ export default function WaliKelasPage() {
             padding: '2px 10px',
             borderRadius: 'var(--radius-full)',
             fontSize: 'var(--font-size-xs)',
-            fontWeight: 'var(--font-weight-bold)',
-            background: `${color}18`,
+            fontWeight: 'var(--font-weight-semibold)',
+            background: `${color}14`,
             color: color,
-            border: `1px solid ${color}35`
+            border: `1px solid ${color}30`
           }}>
             <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: color }} />
             {row.major || 'Umum'}
@@ -316,7 +336,7 @@ export default function WaliKelasPage() {
       }}>
         <div>
           <h1 style={{ fontSize: 'var(--font-size-2xl)', fontWeight: 'var(--font-weight-extrabold)', marginBottom: '4px' }}>
-            👥 Data Kelas & Wali Kelas
+            Data Kelas & Wali Kelas
           </h1>
           <p style={{ color: 'var(--color-text-secondary)', fontSize: 'var(--font-size-sm)' }}>
             Kelola rombel belajar, wali kelas pembimbing, serta master jurusan yang ada di sekolah.
@@ -327,18 +347,12 @@ export default function WaliKelasPage() {
           <Button
             variant="secondary"
             onClick={handleOpenMajorModal}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '6px',
-              border: '1px solid var(--color-border)',
-              background: 'var(--color-surface)'
-            }}
+            style={{ border: '1px solid var(--color-border)', background: 'var(--color-surface)' }}
           >
-            ⚙️ Kelola Jurusan ({majors.length})
+            Kelola Jurusan ({majors.length})
           </Button>
-          <Button onClick={() => handleOpenModal()} style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-            ➕ Tambah Kelas
+          <Button onClick={() => handleOpenModal()}>
+            Tambah Kelas
           </Button>
         </div>
       </div>
@@ -405,7 +419,7 @@ export default function WaliKelasPage() {
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 'var(--space-3)' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)', flexWrap: 'wrap' }}>
             <span style={{ fontSize: 'var(--font-size-sm)', fontWeight: 'var(--font-weight-semibold)', color: 'var(--color-text-secondary)' }}>
-              🔍 Filter:
+              Filter:
             </span>
 
             {/* Filter Tingkat */}
@@ -474,7 +488,11 @@ export default function WaliKelasPage() {
           MODAL 1: TAMBAH / EDIT KELAS
           ============================================================ */}
       {isModalOpen && (
-        <Modal isOpen={isModalOpen} title={editingId ? "Edit Kelas" : "Tambah Kelas Baru"} onClose={handleCloseModal}>
+        <Modal
+          isOpen={isModalOpen}
+          title={editingId ? "Edit Kelas" : "Tambah Kelas Baru"}
+          onClose={handleCloseModal}
+        >
           <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }}>
             <div>
               <label style={{ display: 'block', fontSize: 'var(--font-size-sm)', fontWeight: 'var(--font-weight-semibold)', marginBottom: '4px' }}>
@@ -489,14 +507,14 @@ export default function WaliKelasPage() {
                 style={{ width: '100%', padding: '10px', borderRadius: 'var(--radius-md)', border: '1px solid var(--color-border)' }} 
               />
               <span style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', marginTop: '2px', display: 'block' }}>
-                💡 Tingkat & Jurusan otomatis terdeteksi saat mengetik nama kelas
+                Tingkat dan jurusan otomatis terdeteksi saat mengetik nama kelas
               </span>
             </div>
             
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--space-3)' }}>
               <div>
                 <label style={{ display: 'block', fontSize: 'var(--font-size-sm)', fontWeight: 'var(--font-weight-semibold)', marginBottom: '4px' }}>
-                  Tingkat (Angkatan)
+                  Tingkat
                 </label>
                 <select 
                   value={formData.grade} 
@@ -512,7 +530,7 @@ export default function WaliKelasPage() {
               <div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
                   <label style={{ fontSize: 'var(--font-size-sm)', fontWeight: 'var(--font-weight-semibold)' }}>
-                    Jurusan Sekolah
+                    Jurusan
                   </label>
                   <button
                     type="button"
@@ -530,7 +548,7 @@ export default function WaliKelasPage() {
                       textDecoration: 'underline'
                     }}
                   >
-                    + Kelola Jurusan
+                    Kelola Jurusan
                   </button>
                 </div>
                 <select 
@@ -543,7 +561,7 @@ export default function WaliKelasPage() {
                       {m.kode} — {m.nama}
                     </option>
                   ))}
-                  {majors.length === 0 && <option value="Umum">Umum / Standar</option>}
+                  {majors.length === 0 && <option value="Umum">Umum</option>}
                 </select>
               </div>
             </div>
@@ -588,263 +606,416 @@ export default function WaliKelasPage() {
       )}
 
       {/* ============================================================
-          MODAL 2: KELOLA JURUSAN / PROGRAM KEAHLIAN SEKOLAH
+          MODAL 2: KELOLA PROGRAM KEAHLIAN / JURUSAN SEKOLAH
+          (Desain Profesional, Rapi, Bebas Ikon Sembarangan)
+          ============================================================ */}
+      {/* ============================================================
+          MODAL 2: KELOLA PROGRAM KEAHLIAN / JURUSAN SEKOLAH
+          (Desain Profesional, Rapi, Tabbed Layout, Bebas Ikon Sembarangan)
           ============================================================ */}
       {isMajorModalOpen && (
         <Modal
           isOpen={isMajorModalOpen}
-          title="⚙️ Kelola Program Keahlian / Jurusan Sekolah"
-          onClose={() => setIsMajorModalOpen(false)}
+          title="Kelola Program Keahlian"
+          size="lg"
+          onClose={() => {
+            setIsMajorModalOpen(false);
+            handleCancelEditMajor();
+          }}
         >
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-5)' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }}>
             
-            {/* Form Tambah / Edit Jurusan */}
+            {/* Navigasi Tab Segmented: Daftar Jurusan & Form Tambah/Edit */}
             <div style={{
-              background: 'rgba(59, 130, 246, 0.05)',
-              border: '1px solid rgba(59, 130, 246, 0.2)',
-              borderRadius: 'var(--radius-lg)',
-              padding: 'var(--space-4)'
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              borderBottom: '1px solid var(--color-border)',
+              paddingBottom: 'var(--space-3)',
+              flexWrap: 'wrap',
+              gap: 'var(--space-2)'
             }}>
-              <h3 style={{
-                fontSize: 'var(--font-size-sm)',
-                fontWeight: 'var(--font-weight-bold)',
-                marginBottom: 'var(--space-3)',
-                color: 'var(--color-primary)',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between'
-              }}>
-                <span>{editingMajorId ? '✏️ Edit Jurusan' : '➕ Tambah Jurusan Baru ke Sekolah'}</span>
-                {editingMajorId && (
-                  <button
-                    type="button"
-                    onClick={handleCancelEditMajor}
-                    style={{
-                      background: 'none',
-                      border: 'none',
-                      color: 'var(--color-text-muted)',
-                      fontSize: '0.75rem',
-                      cursor: 'pointer'
-                    }}
-                  >
-                    Batal Edit
-                  </button>
-                )}
-              </h3>
+              <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMajorTab('list');
+                    if (editingMajorId) handleCancelEditMajor();
+                  }}
+                  style={{
+                    padding: '8px 16px',
+                    borderRadius: 'var(--radius-md)',
+                    border: '1px solid',
+                    borderColor: majorTab === 'list' ? 'var(--color-primary)' : 'var(--color-border)',
+                    cursor: 'pointer',
+                    fontWeight: 'var(--font-weight-semibold)',
+                    fontSize: 'var(--font-size-sm)',
+                    background: majorTab === 'list' ? 'var(--color-primary)' : 'var(--color-surface)',
+                    color: majorTab === 'list' ? '#ffffff' : 'var(--color-text)',
+                    transition: 'all var(--transition-fast)'
+                  }}
+                >
+                  Daftar Jurusan ({majors.length})
+                </button>
 
-              <form onSubmit={handleMajorSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
-                <div style={{ display: 'grid', gridTemplateColumns: '120px 1fr 100px', gap: 'var(--space-3)' }}>
-                  <div>
-                    <label style={{ display: 'block', fontSize: 'var(--font-size-xs)', fontWeight: 'var(--font-weight-semibold)', marginBottom: '2px' }}>
-                      Kode Jurusan
-                    </label>
-                    <input
-                      type="text"
-                      placeholder="Misal: DKV"
-                      value={majorForm.kode}
-                      onChange={e => setMajorForm({ ...majorForm, kode: e.target.value.toUpperCase() })}
-                      required
-                      style={{
-                        width: '100%',
-                        padding: '8px',
-                        borderRadius: 'var(--radius-md)',
-                        border: '1px solid var(--color-border)',
-                        textTransform: 'uppercase',
-                        fontWeight: 'var(--font-weight-bold)',
-                        fontSize: 'var(--font-size-sm)'
-                      }}
-                    />
-                  </div>
-
-                  <div>
-                    <label style={{ display: 'block', fontSize: 'var(--font-size-xs)', fontWeight: 'var(--font-weight-semibold)', marginBottom: '2px' }}>
-                      Nama Lengkap Jurusan
-                    </label>
-                    <input
-                      type="text"
-                      placeholder="Misal: Desain Komunikasi Visual"
-                      value={majorForm.nama}
-                      onChange={e => setMajorForm({ ...majorForm, nama: e.target.value })}
-                      required
-                      style={{
-                        width: '100%',
-                        padding: '8px',
-                        borderRadius: 'var(--radius-md)',
-                        border: '1px solid var(--color-border)',
-                        fontSize: 'var(--font-size-sm)'
-                      }}
-                    />
-                  </div>
-
-                  <div>
-                    <label style={{ display: 'block', fontSize: 'var(--font-size-xs)', fontWeight: 'var(--font-weight-semibold)', marginBottom: '2px' }}>
-                      Warna
-                    </label>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                      <input
-                        type="color"
-                        value={majorForm.color}
-                        onChange={e => setMajorForm({ ...majorForm, color: e.target.value })}
-                        style={{
-                          width: '38px',
-                          height: '36px',
-                          padding: '2px',
-                          borderRadius: 'var(--radius-md)',
-                          border: '1px solid var(--color-border)',
-                          cursor: 'pointer'
-                        }}
-                      />
-                      <span style={{ fontSize: '0.7rem', color: 'var(--color-text-muted)' }}>Tag</span>
-                    </div>
-                  </div>
-                </div>
-
-                <div>
-                  <label style={{ display: 'block', fontSize: 'var(--font-size-xs)', fontWeight: 'var(--font-weight-semibold)', marginBottom: '2px' }}>
-                    Deskripsi / Kompetensi Keahlian (Opsional)
-                  </label>
-                  <input
-                    type="text"
-                    placeholder="Contoh: Fokus keahlian desain grafis, animasi, dan multimedia"
-                    value={majorForm.deskripsi}
-                    onChange={e => setMajorForm({ ...majorForm, deskripsi: e.target.value })}
-                    style={{
-                      width: '100%',
-                      padding: '8px',
-                      borderRadius: 'var(--radius-md)',
-                      border: '1px solid var(--color-border)',
-                      fontSize: 'var(--font-size-sm)'
-                    }}
-                  />
-                </div>
-
-                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 'var(--space-2)', marginTop: '4px' }}>
-                  {editingMajorId && (
-                    <Button type="button" variant="secondary" size="sm" onClick={handleCancelEditMajor}>
-                      Batal
-                    </Button>
-                  )}
-                  <Button type="submit" size="sm" loading={majorSubmitting}>
-                    {editingMajorId ? 'Simpan Perubahan Jurusan' : '+ Tambah Jurusan'}
-                  </Button>
-                </div>
-              </form>
-            </div>
-
-            {/* Daftar Jurusan yang Tersedia di Sekolah */}
-            <div>
-              <div style={{
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                marginBottom: 'var(--space-2)'
-              }}>
-                <h4 style={{
-                  fontSize: 'var(--font-size-sm)',
-                  fontWeight: 'var(--font-weight-bold)',
-                  margin: 0
-                }}>
-                  Daftar Jurusan di Sekolah ({majors.length})
-                </h4>
-                <span style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>
-                  Jurusan yang digunakan oleh kelas tidak dapat dihapus sembarangan
-                </span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!editingMajorId) {
+                      setMajorForm({ kode: '', nama: '', deskripsi: '', color: '#2563EB' });
+                    }
+                    setMajorTab('form');
+                  }}
+                  style={{
+                    padding: '8px 16px',
+                    borderRadius: 'var(--radius-md)',
+                    border: '1px solid',
+                    borderColor: majorTab === 'form' ? 'var(--color-primary)' : 'var(--color-border)',
+                    cursor: 'pointer',
+                    fontWeight: 'var(--font-weight-semibold)',
+                    fontSize: 'var(--font-size-sm)',
+                    background: majorTab === 'form' ? 'var(--color-primary)' : 'var(--color-surface)',
+                    color: majorTab === 'form' ? '#ffffff' : 'var(--color-text)',
+                    transition: 'all var(--transition-fast)'
+                  }}
+                >
+                  {editingMajorId ? `Edit Jurusan (${majorForm.kode})` : 'Tambah Jurusan Baru'}
+                </button>
               </div>
 
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)', maxHeight: '320px', overflowY: 'auto' }}>
-                {majors.map((jurusan) => {
-                  const classCount = classes.filter(c => c.major === jurusan.kode).length;
-                  const isEditingThis = editingMajorId === jurusan.id;
+              {majorTab === 'list' && (
+                <Button size="sm" onClick={handleAddNewMajorClick}>
+                  Tambah Jurusan
+                </Button>
+              )}
+            </div>
 
-                  return (
-                    <div
-                      key={jurusan.id || jurusan.kode}
-                      style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'space-between',
-                        padding: '10px 14px',
-                        background: isEditingThis ? 'rgba(59, 130, 246, 0.08)' : 'var(--color-surface)',
-                        border: isEditingThis ? '1.5px solid var(--color-primary)' : '1px solid var(--color-border)',
-                        borderRadius: 'var(--radius-md)',
-                        gap: 'var(--space-3)'
-                      }}
-                    >
-                      {/* Info Jurusan */}
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)', flex: 1 }}>
-                        <span style={{
-                          display: 'inline-flex',
+            {/* TAB 1: DAFTAR JURUSAN TERDAFTAR */}
+            {majorTab === 'list' && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
+                <div style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  fontSize: 'var(--font-size-xs)',
+                  color: 'var(--color-text-secondary)',
+                  paddingBottom: '2px',
+                  flexWrap: 'wrap',
+                  gap: 'var(--space-2)'
+                }}>
+                  <span>Total {majors.length} program keahlian terdaftar pada sistem sekolah.</span>
+                  <span>Jurusan yang digunakan kelas aktif diproteksi dari penghapusan.</span>
+                </div>
+
+                <div style={{
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 'var(--space-2)',
+                  maxHeight: '400px',
+                  overflowY: 'auto',
+                  paddingRight: '6px',
+                  boxSizing: 'border-box'
+                }}>
+                  {majors.map((jurusan) => {
+                    const classCount = classes.filter(c => c.major === jurusan.kode).length;
+                    const isEditingThis = editingMajorId === jurusan.id;
+
+                    return (
+                      <div
+                        key={jurusan.id || jurusan.kode}
+                        style={{
+                          display: 'flex',
                           alignItems: 'center',
-                          justifyContent: 'center',
-                          width: '48px',
-                          height: '32px',
-                          borderRadius: 'var(--radius-md)',
-                          background: `${jurusan.color || '#3B82F6'}20`,
-                          color: jurusan.color || '#3B82F6',
-                          fontWeight: 'var(--font-weight-extrabold)',
-                          fontSize: 'var(--font-size-xs)',
-                          border: `1px solid ${jurusan.color || '#3B82F6'}40`,
-                          flexShrink: 0
-                        }}>
-                          {jurusan.kode}
-                        </span>
+                          justifyContent: 'space-between',
+                          padding: '12px 14px',
+                          background: isEditingThis ? 'rgba(37, 99, 235, 0.04)' : 'var(--color-surface)',
+                          border: isEditingThis ? '1.5px solid var(--color-primary)' : '1px solid var(--color-border)',
+                          borderRadius: 'var(--radius-lg)',
+                          gap: 'var(--space-3)',
+                          boxSizing: 'border-box',
+                          width: '100%'
+                        }}
+                      >
+                        {/* Info Utama Jurusan */}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flex: 1, minWidth: 0 }}>
+                          {/* Badge Kode Tag Jurusan */}
+                          <span style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '6px',
+                            minWidth: '50px',
+                            justifyContent: 'center',
+                            padding: '4px 8px',
+                            borderRadius: 'var(--radius-md)',
+                            background: `${jurusan.color || '#2563EB'}14`,
+                            color: jurusan.color || '#2563EB',
+                            fontWeight: 'var(--font-weight-bold)',
+                            fontSize: 'var(--font-size-xs)',
+                            border: `1px solid ${jurusan.color || '#2563EB'}35`,
+                            flexShrink: 0
+                          }}>
+                            <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: jurusan.color || '#2563EB' }} />
+                            {jurusan.kode}
+                          </span>
 
-                        <div style={{ minWidth: 0, flex: 1 }}>
-                          <div style={{ fontWeight: 'var(--font-weight-bold)', fontSize: 'var(--font-size-sm)', color: 'var(--color-text)' }}>
-                            {jurusan.nama}
-                          </div>
-                          {jurusan.deskripsi && (
+                          <div style={{ minWidth: 0, flex: 1 }}>
                             <div style={{
-                              fontSize: '0.75rem',
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '6px',
+                              flexWrap: 'wrap'
+                            }}>
+                              <span style={{
+                                fontWeight: 'var(--font-weight-semibold)',
+                                fontSize: 'var(--font-size-sm)',
+                                color: 'var(--color-text)'
+                              }}>
+                                {jurusan.nama}
+                              </span>
+                              <Badge variant={classCount > 0 ? 'primary' : 'default'} size="xs">
+                                {classCount} kelas
+                              </Badge>
+                            </div>
+                            <div style={{
+                              fontSize: 'var(--font-size-xs)',
                               color: 'var(--color-text-muted)',
+                              marginTop: '2px',
                               overflow: 'hidden',
                               textOverflow: 'ellipsis',
                               whiteSpace: 'nowrap'
                             }}>
-                              {jurusan.deskripsi}
+                              {jurusan.deskripsi || 'Belum ada keterangan kompetensi.'}
                             </div>
-                          )}
+                          </div>
                         </div>
 
-                        {/* Jumlah Kelas Terdaftar */}
-                        <Badge variant={classCount > 0 ? 'primary' : 'default'} size="xs">
-                          {classCount} kelas
-                        </Badge>
+                        {/* Tombol Aksi (Pasti berada rapi di dalam card) */}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
+                          <Button
+                            size="xs"
+                            variant="secondary"
+                            onClick={() => handleEditMajor(jurusan)}
+                            style={{ padding: '5px 12px' }}
+                          >
+                            Edit
+                          </Button>
+                          <Button
+                            size="xs"
+                            variant="danger"
+                            onClick={() => handleDeleteMajor(jurusan.id, jurusan.kode)}
+                            disabled={classCount > 0}
+                            title={classCount > 0 ? `Tidak dapat dihapus karena digunakan oleh ${classCount} kelas aktif` : 'Hapus jurusan'}
+                            style={{ padding: '5px 12px' }}
+                          >
+                            Hapus
+                          </Button>
+                        </div>
+                      </div>
+                    );
+                  })}
+
+                  {majors.length === 0 && (
+                    <div style={{
+                      textAlign: 'center',
+                      padding: 'var(--space-8)',
+                      background: 'var(--color-surface-hover, #F8FAFC)',
+                      borderRadius: 'var(--radius-lg)',
+                      border: '1px dashed var(--color-border)'
+                    }}>
+                      <p style={{ color: 'var(--color-text-secondary)', fontSize: 'var(--font-size-sm)', margin: '0 0 var(--space-3)' }}>
+                        Belum ada program keahlian yang terdaftar.
+                      </p>
+                      <Button size="sm" onClick={handleAddNewMajorClick}>
+                        Tambah Jurusan Pertama
+                      </Button>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* TAB 2: FORM TAMBAH / EDIT JURUSAN */}
+            {majorTab === 'form' && (
+              <div style={{
+                background: 'var(--color-surface-hover, #F8FAFC)',
+                border: '1px solid var(--color-border)',
+                borderRadius: 'var(--radius-lg)',
+                padding: 'var(--space-5)'
+              }}>
+                <div style={{ marginBottom: 'var(--space-4)' }}>
+                  <h4 style={{
+                    fontSize: 'var(--font-size-base)',
+                    fontWeight: 'var(--font-weight-bold)',
+                    color: 'var(--color-text)',
+                    margin: 0
+                  }}>
+                    {editingMajorId ? `Edit Data Program Keahlian: ${majorForm.kode}` : 'Tambah Program Keahlian Baru'}
+                  </h4>
+                  <p style={{ fontSize: 'var(--font-size-xs)', color: 'var(--color-text-secondary)', margin: '4px 0 0' }}>
+                    Tentukan singkatan kode resmi, nama lengkap program keahlian, dan warna penanda identitas rombel.
+                  </p>
+                </div>
+
+                <form onSubmit={handleMajorSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: 'var(--space-4)' }}>
+                    <div>
+                      <label style={{ display: 'block', fontSize: 'var(--font-size-xs)', fontWeight: 'var(--font-weight-semibold)', marginBottom: '6px' }}>
+                        Kode Jurusan
+                      </label>
+                      <input
+                        type="text"
+                        placeholder="Contoh: DKV"
+                        value={majorForm.kode}
+                        onChange={e => setMajorForm({ ...majorForm, kode: e.target.value.toUpperCase() })}
+                        required
+                        style={{
+                          width: '100%',
+                          padding: '10px 12px',
+                          borderRadius: 'var(--radius-md)',
+                          border: '1px solid var(--color-border)',
+                          textTransform: 'uppercase',
+                          fontWeight: 'var(--font-weight-bold)',
+                          fontSize: 'var(--font-size-sm)',
+                          background: 'var(--color-surface)'
+                        }}
+                      />
+                      <span style={{ fontSize: '0.7rem', color: 'var(--color-text-muted)', marginTop: '4px', display: 'block' }}>
+                        Singkatan 2 - 6 huruf kapital (misal: TKJ, RPL, AKL)
+                      </span>
+                    </div>
+
+                    <div>
+                      <label style={{ display: 'block', fontSize: 'var(--font-size-xs)', fontWeight: 'var(--font-weight-semibold)', marginBottom: '6px' }}>
+                        Nama Program Keahlian
+                      </label>
+                      <input
+                        type="text"
+                        placeholder="Contoh: Desain Komunikasi Visual"
+                        value={majorForm.nama}
+                        onChange={e => setMajorForm({ ...majorForm, nama: e.target.value })}
+                        required
+                        style={{
+                          width: '100%',
+                          padding: '10px 12px',
+                          borderRadius: 'var(--radius-md)',
+                          border: '1px solid var(--color-border)',
+                          fontSize: 'var(--font-size-sm)',
+                          background: 'var(--color-surface)'
+                        }}
+                      />
+                      <span style={{ fontSize: '0.7rem', color: 'var(--color-text-muted)', marginTop: '4px', display: 'block' }}>
+                        Nama lengkap bidang atau kompetensi keahlian
+                      </span>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label style={{ display: 'block', fontSize: 'var(--font-size-xs)', fontWeight: 'var(--font-weight-semibold)', marginBottom: '6px' }}>
+                      Deskripsi / Keterangan Kompetensi (Opsional)
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="Contoh: Fokus pada desain grafis, multimedia, ilustrasi digital, dan fotografi"
+                      value={majorForm.deskripsi}
+                      onChange={e => setMajorForm({ ...majorForm, deskripsi: e.target.value })}
+                      style={{
+                        width: '100%',
+                        padding: '10px 12px',
+                        borderRadius: 'var(--radius-md)',
+                        border: '1px solid var(--color-border)',
+                        fontSize: 'var(--font-size-sm)',
+                        background: 'var(--color-surface)'
+                      }}
+                    />
+                  </div>
+
+                  {/* Pemilih Warna Tag Preset & Pratinjau */}
+                  <div>
+                    <label style={{ display: 'block', fontSize: 'var(--font-size-xs)', fontWeight: 'var(--font-weight-semibold)', marginBottom: '8px' }}>
+                      Warna Penanda Identitas Tag
+                    </label>
+                    <div style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      flexWrap: 'wrap',
+                      gap: 'var(--space-3)',
+                      padding: '12px 14px',
+                      background: 'var(--color-surface)',
+                      borderRadius: 'var(--radius-md)',
+                      border: '1px solid var(--color-border)'
+                    }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                        {PRESET_COLORS.map(c => {
+                          const isSelected = majorForm.color === c.value;
+                          return (
+                            <button
+                              key={c.value}
+                              type="button"
+                              onClick={() => setMajorForm({ ...majorForm, color: c.value })}
+                              title={c.label}
+                              style={{
+                                width: '28px',
+                                height: '28px',
+                                borderRadius: '50%',
+                                background: c.value,
+                                border: isSelected ? '2px solid var(--color-surface)' : '2px solid transparent',
+                                outline: isSelected ? `2px solid ${c.value}` : 'none',
+                                cursor: 'pointer',
+                                padding: 0,
+                                transition: 'transform 100ms ease',
+                                transform: isSelected ? 'scale(1.15)' : 'scale(1)'
+                              }}
+                            />
+                          );
+                        })}
                       </div>
 
-                      {/* Tombol Aksi */}
-                      <div style={{ display: 'flex', gap: '6px', flexShrink: 0 }}>
-                        <Button
-                          size="xs"
-                          variant="secondary"
-                          onClick={() => handleEditMajor(jurusan)}
-                        >
-                          Edit
-                        </Button>
-                        <Button
-                          size="xs"
-                          variant="danger"
-                          onClick={() => handleDeleteMajor(jurusan.id, jurusan.kode)}
-                          disabled={classCount > 0}
-                          title={classCount > 0 ? 'Tidak bisa dihapus karena masih ada kelas yang menggunakan jurusan ini' : 'Hapus jurusan'}
-                        >
-                          Hapus
-                        </Button>
+                      {/* Live Tag Preview Badge */}
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <span style={{ fontSize: 'var(--font-size-xs)', color: 'var(--color-text-muted)' }}>
+                          Pratinjau:
+                        </span>
+                        <span style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '6px',
+                          padding: '4px 12px',
+                          borderRadius: 'var(--radius-full)',
+                          fontSize: 'var(--font-size-xs)',
+                          fontWeight: 'var(--font-weight-semibold)',
+                          background: `${majorForm.color}14`,
+                          color: majorForm.color,
+                          border: `1px solid ${majorForm.color}35`
+                        }}>
+                          <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: majorForm.color }} />
+                          {majorForm.kode || 'KODE'} — {majorForm.nama || 'Pratinjau Tag'}
+                        </span>
                       </div>
                     </div>
-                  );
-                })}
+                  </div>
 
-                {majors.length === 0 && (
-                  <p style={{ textAlign: 'center', color: 'var(--color-text-muted)', fontSize: 'var(--font-size-sm)', padding: 'var(--space-4)' }}>
-                    Belum ada jurusan yang didaftarkan.
-                  </p>
-                )}
+                  <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 'var(--space-2)', marginTop: 'var(--space-2)' }}>
+                    <Button type="button" variant="secondary" onClick={handleCancelEditMajor}>
+                      Batal
+                    </Button>
+                    <Button type="submit" loading={majorSubmitting}>
+                      {editingMajorId ? 'Simpan Perubahan' : 'Tambah Jurusan'}
+                    </Button>
+                  </div>
+                </form>
               </div>
-            </div>
+            )}
 
+            {/* Footer Modal: Tombol Tutup */}
             <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 'var(--space-2)' }}>
-              <Button variant="secondary" onClick={() => setIsMajorModalOpen(false)}>
+              <Button
+                variant="secondary"
+                onClick={() => {
+                  setIsMajorModalOpen(false);
+                  handleCancelEditMajor();
+                }}
+              >
                 Tutup
               </Button>
             </div>
