@@ -857,8 +857,17 @@ app.delete('/api/kelas/:id', async (req, res) => {
 
 app.get('/api/tahun-ajar', async (req, res) => {
   try {
-    const data = await prisma.tahunAjar.findMany({ orderBy: { startDate: 'desc' } });
-    res.json(data);
+    const data = await prisma.tahunAjar.findMany({
+      orderBy: [
+        { isActive: 'desc' },
+        { startDate: 'desc' }
+      ]
+    });
+    res.json(data.map(ta => ({
+      ...ta,
+      startDate: ta.startDate ? (typeof ta.startDate === 'string' ? ta.startDate.split('T')[0] : ta.startDate.toISOString().split('T')[0]) : '',
+      endDate: ta.endDate ? (typeof ta.endDate === 'string' ? ta.endDate.split('T')[0] : ta.endDate.toISOString().split('T')[0]) : ''
+    })));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -866,14 +875,30 @@ app.get('/api/tahun-ajar', async (req, res) => {
 
 app.post('/api/tahun-ajar', async (req, res) => {
   try {
-    const { nama, semester, startDate, endDate } = req.body;
+    const { nama, semester, startDate, endDate, isActive } = req.body;
+    const shouldBeActive = Boolean(isActive);
+
+    if (shouldBeActive) {
+      await prisma.tahunAjar.updateMany({ data: { isActive: false } });
+    }
+
     const ta = await prisma.tahunAjar.create({
       data: {
-        nama, semester: Number(semester), isActive: false,
-        startDate: new Date(startDate), endDate: new Date(endDate)
+        nama: (nama || '').trim(),
+        semester: Number(semester) || 1,
+        isActive: shouldBeActive,
+        startDate: new Date(startDate),
+        endDate: new Date(endDate)
       }
     });
-    res.json({ success: true, data: ta, message: 'Tahun ajar berhasil ditambahkan' });
+
+    const formattedTa = {
+      ...ta,
+      startDate: ta.startDate ? ta.startDate.toISOString().split('T')[0] : '',
+      endDate: ta.endDate ? ta.endDate.toISOString().split('T')[0] : ''
+    };
+
+    res.json({ success: true, data: formattedTa, message: 'Tahun ajar berhasil ditambahkan' });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
@@ -882,15 +907,33 @@ app.post('/api/tahun-ajar', async (req, res) => {
 app.put('/api/tahun-ajar/:id', async (req, res) => {
   const { id } = req.params;
   try {
-    const { nama, semester, startDate, endDate } = req.body;
-    await prisma.tahunAjar.update({
-      where: { id },
-      data: {
-        nama, semester: Number(semester),
-        startDate: new Date(startDate), endDate: new Date(endDate)
+    const { nama, semester, startDate, endDate, isActive } = req.body;
+    const updateData = {};
+    if (nama) updateData.nama = nama.trim();
+    if (semester !== undefined) updateData.semester = Number(semester);
+    if (startDate) updateData.startDate = new Date(startDate);
+    if (endDate) updateData.endDate = new Date(endDate);
+    if (isActive !== undefined) {
+      if (isActive) {
+        await prisma.tahunAjar.updateMany({ data: { isActive: false } });
       }
+      updateData.isActive = Boolean(isActive);
+    }
+
+    const updated = await prisma.tahunAjar.update({
+      where: { id },
+      data: updateData
     });
-    res.json({ success: true, message: 'Tahun ajar berhasil diperbarui' });
+
+    res.json({
+      success: true,
+      data: {
+        ...updated,
+        startDate: updated.startDate ? updated.startDate.toISOString().split('T')[0] : '',
+        endDate: updated.endDate ? updated.endDate.toISOString().split('T')[0] : ''
+      },
+      message: 'Tahun ajar berhasil diperbarui'
+    });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
@@ -912,8 +955,16 @@ app.put('/api/tahun-ajar/:id/activate', async (req, res) => {
     // Nonaktifkan semua dulu
     await prisma.tahunAjar.updateMany({ data: { isActive: false } });
     // Aktifkan yang dipilih
-    await prisma.tahunAjar.update({ where: { id }, data: { isActive: true } });
-    res.json({ success: true, message: 'Tahun ajar aktif berhasil diubah' });
+    const activated = await prisma.tahunAjar.update({ where: { id }, data: { isActive: true } });
+    res.json({
+      success: true,
+      data: {
+        ...activated,
+        startDate: activated.startDate ? activated.startDate.toISOString().split('T')[0] : '',
+        endDate: activated.endDate ? activated.endDate.toISOString().split('T')[0] : ''
+      },
+      message: 'Tahun ajar aktif berhasil diubah'
+    });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }

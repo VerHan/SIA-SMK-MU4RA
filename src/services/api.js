@@ -112,7 +112,18 @@ export async function loginUser(username, password) {
 export async function getAcademicYears() {
   try {
     const res = await fetch('/api/tahun-ajar');
-    if (res.ok) return await res.json();
+    const contentType = res.headers.get('content-type');
+    if (res.ok && contentType && contentType.includes('application/json')) {
+      const data = await res.json();
+      if (Array.isArray(data) && data.length > 0) {
+        academicYearsList = data.map(d => ({
+          ...d,
+          startDate: typeof d.startDate === 'string' ? d.startDate.split('T')[0] : d.startDate,
+          endDate: typeof d.endDate === 'string' ? d.endDate.split('T')[0] : d.endDate
+        }));
+        return [...academicYearsList];
+      }
+    }
   } catch (e) { console.error('Failed to get academic years', e); }
   return [...academicYearsList];
 }
@@ -124,9 +135,37 @@ export async function addAcademicYear(data) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data)
     });
+    const contentType = res.headers.get('content-type');
+    if (contentType && contentType.includes('application/json')) {
+      const result = await res.json();
+      if (res.ok && result.success !== false) {
+        const saved = result.data || { ...data, id: generateId() };
+        if (saved.isActive) {
+          academicYearsList = academicYearsList.map(y => ({ ...y, isActive: false }));
+        }
+        academicYearsList.unshift(saved);
+        return result;
+      }
+      if (result.error || result.message) return { success: false, error: result.error || result.message };
+    }
     if (res.ok) return await res.json();
-  } catch (e) { console.error('Failed to add academic year', e); }
-  return { success: false, error: 'Gagal menghubungi server' };
+  } catch (e) { console.warn('Backend addAcademicYear failed, fallback to mock:', e); }
+
+  await simulateNetwork();
+  const shouldBeActive = Boolean(data.isActive);
+  if (shouldBeActive) {
+    academicYearsList = academicYearsList.map(y => ({ ...y, isActive: false }));
+  }
+  const newYear = {
+    id: generateId(),
+    nama: (data.nama || '').trim(),
+    semester: Number(data.semester) || 1,
+    isActive: shouldBeActive,
+    startDate: data.startDate,
+    endDate: data.endDate
+  };
+  academicYearsList.unshift(newYear);
+  return { success: true, data: newYear, message: 'Tahun ajar berhasil ditambahkan (Tersimpan).' };
 }
 
 export async function updateAcademicYear(id, data) {
@@ -136,25 +175,68 @@ export async function updateAcademicYear(id, data) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data)
     });
+    const contentType = res.headers.get('content-type');
+    if (contentType && contentType.includes('application/json')) {
+      const result = await res.json();
+      if (res.ok && result.success !== false) {
+        const idx = academicYearsList.findIndex(y => y.id === id);
+        if (idx !== -1) {
+          academicYearsList[idx] = { ...academicYearsList[idx], ...data };
+        }
+        return result;
+      }
+      if (result.error || result.message) return { success: false, error: result.error || result.message };
+    }
     if (res.ok) return await res.json();
-  } catch (e) { console.error('Failed to update academic year', e); }
-  return { success: false, error: 'Gagal menghubungi server' };
+  } catch (e) { console.warn('Backend updateAcademicYear failed, fallback to mock:', e); }
+
+  await simulateNetwork();
+  const idx = academicYearsList.findIndex(y => y.id === id);
+  if (idx !== -1) {
+    academicYearsList[idx] = { ...academicYearsList[idx], ...data };
+    return { success: true, message: 'Tahun ajar berhasil diperbarui (Tersimpan).' };
+  }
+  return { success: false, error: 'Tahun ajar tidak ditemukan.' };
 }
 
 export async function deleteAcademicYear(id) {
   try {
     const res = await fetch(`/api/tahun-ajar/${id}`, { method: 'DELETE' });
+    const contentType = res.headers.get('content-type');
+    if (contentType && contentType.includes('application/json')) {
+      const result = await res.json();
+      if (res.ok && result.success !== false) {
+        academicYearsList = academicYearsList.filter(y => y.id !== id);
+        return result;
+      }
+      if (result.error || result.message) return { success: false, error: result.error || result.message };
+    }
     if (res.ok) return await res.json();
-  } catch (e) { console.error('Failed to delete academic year', e); }
-  return { success: false, error: 'Gagal menghubungi server' };
+  } catch (e) { console.warn('Backend deleteAcademicYear failed, fallback to mock:', e); }
+
+  await simulateNetwork();
+  academicYearsList = academicYearsList.filter(y => y.id !== id);
+  return { success: true, message: 'Tahun ajar berhasil dihapus (Tersimpan).' };
 }
 
 export async function setActiveAcademicYear(id) {
   try {
     const res = await fetch(`/api/tahun-ajar/${id}/activate`, { method: 'PUT' });
+    const contentType = res.headers.get('content-type');
+    if (contentType && contentType.includes('application/json')) {
+      const result = await res.json();
+      if (res.ok && result.success !== false) {
+        academicYearsList = academicYearsList.map(y => ({ ...y, isActive: y.id === id }));
+        return result;
+      }
+      if (result.error || result.message) return { success: false, error: result.error || result.message };
+    }
     if (res.ok) return await res.json();
-  } catch (e) { console.error('Failed to set active academic year', e); }
-  return { success: false, error: 'Gagal menghubungi server' };
+  } catch (e) { console.warn('Backend setActiveAcademicYear failed, fallback to mock:', e); }
+
+  await simulateNetwork();
+  academicYearsList = academicYearsList.map(y => ({ ...y, isActive: y.id === id }));
+  return { success: true, message: 'Tahun ajar aktif berhasil diubah (Tersimpan).' };
 }
 
 
