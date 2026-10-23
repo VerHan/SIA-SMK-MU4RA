@@ -10,30 +10,33 @@ import { Link, NavLink, useNavigate } from 'react-router-dom';
 import { SCHOOL_INFO, PUBLIC_NAV_ITEMS } from '../../config/constants';
 import { useAuth } from '../../hooks/useAuth';
 import Button from '../ui/Button';
+import SmkLogoEmblem from '../shared/SmkLogoEmblem';
 
 export default function Navbar() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-  const { isAuthenticated } = useAuth();
+  const { isAuthenticated, user } = useAuth();
   const navigate = useNavigate();
 
-  const linkStyle = (isActive) => ({
-    color: isActive ? 'var(--color-primary)' : 'var(--color-text-secondary)',
-    fontWeight: isActive ? 'var(--font-weight-semibold)' : 'var(--font-weight-medium)',
-    fontSize: 'var(--font-size-sm)',
-    padding: 'var(--space-2) var(--space-3)',
-    borderRadius: 'var(--radius-md)',
-    transition: 'all var(--transition-fast)',
-    textDecoration: 'none',
-  });
+  const getPortalDestination = () => {
+    if (!isAuthenticated) return '/login';
+    if (user?.role === 'admin') return '/dashboard/ringkasan';
+    return '/app/home';
+  };
+
+  const getPortalLabel = () => {
+    if (!isAuthenticated) return '🔑 Login SIA';
+    if (user?.role === 'admin') return '⚙️ Dashboard';
+    return '📱 Portal Guru';
+  };
 
   return (
     <nav style={{
       position: 'sticky',
       top: 0,
       zIndex: 'var(--z-navbar)',
-      background: 'rgba(255, 255, 255, 0.9)',
-      backdropFilter: 'blur(12px)',
-      WebkitBackdropFilter: 'blur(12px)',
+      background: 'rgba(255, 255, 255, 0.95)',
+      backdropFilter: 'blur(16px)',
+      WebkitBackdropFilter: 'blur(16px)',
       borderBottom: '1px solid var(--color-border-light)',
       height: 'var(--navbar-height)',
     }}>
@@ -54,20 +57,7 @@ export default function Navbar() {
           textDecoration: 'none',
           color: 'var(--color-text)',
         }}>
-          <div style={{
-            width: '36px',
-            height: '36px',
-            borderRadius: 'var(--radius-lg)',
-            background: 'linear-gradient(135deg, var(--color-primary), var(--color-primary-light))',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            color: 'white',
-            fontWeight: 'var(--font-weight-extrabold)',
-            fontSize: 'var(--font-size-sm)',
-          }}>
-            SIA
-          </div>
+          <SmkLogoEmblem size="sm" />
           <div>
             <div style={{
               fontWeight: 'var(--font-weight-bold)',
@@ -99,14 +89,7 @@ export default function Navbar() {
               key={item.path}
               to={item.path}
               end={item.path === '/'}
-              style={({ isActive }) => linkStyle(isActive)}
-              onMouseEnter={(e) => {
-                e.currentTarget.style.background = 'var(--color-primary-surface)';
-                e.currentTarget.style.color = 'var(--color-primary)';
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.background = 'transparent';
-              }}
+              className={({ isActive }) => `nav-desktop-link ${isActive ? 'active' : ''}`}
             >
               {item.label}
             </NavLink>
@@ -114,12 +97,14 @@ export default function Navbar() {
 
           <div style={{ width: '1px', height: '24px', background: 'var(--color-border)', margin: '0 var(--space-3)' }} />
 
-          <Button
-            size="sm"
-            onClick={() => navigate(isAuthenticated ? '/dashboard' : '/login')}
+          {/* Bubble Login SIA — Selalu Berwarna Biru & Menonjol */}
+          <button
+            type="button"
+            onClick={() => navigate(getPortalDestination())}
+            className="nav-login-bubble"
           >
-            {isAuthenticated ? 'Dashboard' : 'Login'}
-          </Button>
+            {getPortalLabel()}
+          </button>
         </div>
 
         {/* Mobile Hamburger */}
@@ -131,6 +116,9 @@ export default function Navbar() {
             flexDirection: 'column',
             gap: '5px',
             padding: 'var(--space-2)',
+            background: 'transparent',
+            border: 'none',
+            cursor: 'pointer',
           }}
           aria-label="Toggle menu"
         >
@@ -183,27 +171,22 @@ export default function Navbar() {
               to={item.path}
               end={item.path === '/'}
               onClick={() => setMobileMenuOpen(false)}
-              style={({ isActive }) => ({
-                ...linkStyle(isActive),
-                padding: 'var(--space-3)',
-                borderRadius: 'var(--radius-md)',
-                display: 'block',
-              })}
+              className={({ isActive }) => `nav-mobile-link ${isActive ? 'active' : ''}`}
             >
               {item.label}
             </NavLink>
           ))}
-          <Button
-            fullWidth
-            size="sm"
+          <button
+            type="button"
             onClick={() => {
               setMobileMenuOpen(false);
-              navigate(isAuthenticated ? '/dashboard' : '/login');
+              navigate(getPortalDestination());
             }}
-            style={{ marginTop: 'var(--space-2)' }}
+            className="nav-login-bubble"
+            style={{ width: '100%', justifyContent: 'center', marginTop: 'var(--space-2)' }}
           >
-            {isAuthenticated ? 'Dashboard' : 'Login'}
-          </Button>
+            {getPortalLabel()}
+          </button>
         </div>
       )}
 

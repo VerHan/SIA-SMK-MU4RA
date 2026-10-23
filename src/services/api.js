@@ -61,6 +61,8 @@ let scheduleList = [...MOCK_SCHEDULE];
 let academicCalendarList = [...MOCK_ACADEMIC_CALENDAR];
 let timeSlotsList = [...MOCK_TIME_SLOTS];
 let studentAttitudeList = MOCK_STUDENT_ATTITUDE ? [...MOCK_STUDENT_ATTITUDE] : [];
+let newsList = MOCK_NEWS ? [...MOCK_NEWS] : [];
+let ppdbList = [];
 
 /* Legacy GPS teacher attendance (for AbsenGuruGPSPage) */
 let teacherGPSAttendanceList = [
@@ -1307,4 +1309,141 @@ export async function getStudentProfile(studentId) {
     mapelSummary,
     attitudeRecords
   };
+}
+
+/* ============================================================
+   BERITA & ARTIKEL PUBLIK
+   ============================================================ */
+export async function getNews() {
+  await simulateNetwork();
+  try {
+    const res = await fetch('/api/berita');
+    const contentType = res.headers.get('content-type');
+    if (res.ok && contentType && contentType.includes('application/json')) {
+      const data = await res.json();
+      if (Array.isArray(data) && data.length > 0) {
+        newsList = data;
+        return [...newsList];
+      }
+    }
+  } catch (err) {
+    /* fallback to memory */
+  }
+  return [...newsList];
+}
+
+export async function getNewsById(id) {
+  await simulateNetwork();
+  try {
+    const res = await fetch(`/api/berita/${id}`);
+    const contentType = res.headers.get('content-type');
+    if (res.ok && contentType && contentType.includes('application/json')) {
+      const data = await res.json();
+      if (data && data.id) return data;
+    }
+  } catch (err) {
+    /* fallback to memory */
+  }
+  return newsList.find(n => n.id === id) || null;
+}
+
+export async function addNews(data) {
+  await simulateNetwork();
+  const newItem = {
+    id: generateId(),
+    title: (data.title || '').trim(),
+    excerpt: (data.excerpt || data.content?.slice(0, 140) || '').trim(),
+    content: (data.content || '').trim(),
+    category: data.category || 'Pengumuman',
+    author: data.author || 'Admin',
+    date: data.date || new Date().toISOString().split('T')[0],
+    image: data.image || null,
+  };
+  newsList.unshift(newItem);
+  return { success: true, data: newItem, message: 'Berita berhasil diterbitkan!' };
+}
+
+export async function updateNews(id, data) {
+  await simulateNetwork();
+  const index = newsList.findIndex(n => n.id === id);
+  if (index !== -1) {
+    newsList[index] = { ...newsList[index], ...data };
+    return { success: true, message: 'Berita berhasil diperbarui.' };
+  }
+  return { success: false, error: 'Berita tidak ditemukan.' };
+}
+
+export async function deleteNews(id) {
+  await simulateNetwork();
+  newsList = newsList.filter(n => n.id !== id);
+  return { success: true, message: 'Berita berhasil dihapus.' };
+}
+
+/* ============================================================
+   PENDAFTARAN ONLINE (PPDB) DENGAN INTEGRASI GOOGLE SHEET & EMAIL
+   ============================================================ */
+export async function submitPPDB(data) {
+  await simulateNetwork();
+  const now = new Date();
+  const regNumber = `PPDB-${now.getFullYear()}-${String(Math.floor(1000 + Math.random() * 9000))}`;
+  
+  const registrationRecord = {
+    id: generateId(),
+    regNumber,
+    timestamp: now.toISOString(),
+    name: (data.name || '').trim(),
+    nisn: (data.nisn || '').trim(),
+    gender: data.gender || 'L',
+    schoolOrigin: (data.schoolOrigin || '').trim(),
+    majorChoice: data.majorChoice || 'TKJ',
+    phoneStudent: (data.phoneStudent || '').trim(),
+    phoneParent: (data.phoneParent || '').trim(),
+    email: (data.email || '').trim(),
+    address: (data.address || '').trim(),
+    track: data.track || 'Reguler',
+    status: 'Menunggu Verifikasi',
+  };
+
+  ppdbList.unshift(registrationRecord);
+
+  // Simpan juga ke localStorage agar tidak hilang di browser
+  try {
+    const existing = JSON.parse(localStorage.getItem('sia_ppdb_submissions') || '[]');
+    existing.unshift(registrationRecord);
+    localStorage.setItem('sia_ppdb_submissions', JSON.stringify(existing));
+  } catch (e) {
+    console.warn('LocalStorage PPDB error:', e);
+  }
+
+  // Jika sekolah sudah memasang Webhook Google Apps Script di Pengaturan, kirim langsung
+  const webhookUrl = localStorage.getItem('sia_ppdb_google_webhook_url');
+  if (webhookUrl) {
+    try {
+      fetch(webhookUrl, {
+        method: 'POST',
+        mode: 'no-cors',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(registrationRecord),
+      }).catch(err => console.warn('Webhook Google Sheets PPDB warning:', err));
+    } catch (e) {
+      console.warn('Failed to call Google Apps Script webhook:', e);
+    }
+  }
+
+  return {
+    success: true,
+    data: registrationRecord,
+    message: 'Pendaftaran Anda berhasil dikirim! Silakan simpan nomor pendaftaran Anda.',
+  };
+}
+
+export async function getPPDBList() {
+  await simulateNetwork();
+  try {
+    const fromStorage = JSON.parse(localStorage.getItem('sia_ppdb_submissions') || '[]');
+    if (fromStorage.length > ppdbList.length) {
+      ppdbList = fromStorage;
+    }
+  } catch (e) {}
+  return [...ppdbList];
 }

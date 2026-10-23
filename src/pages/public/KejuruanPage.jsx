@@ -108,10 +108,10 @@ export default function KejuruanPage() {
 /* Helper: keahlian yang dipelajari per jurusan */
 function getSkillsForMajor(majorId) {
   const skills = {
-    tkj: ['Cisco Networking', 'MikroTik', 'Windows Server', 'Linux', 'Fiber Optic'],
-    rpl: ['HTML/CSS/JS', 'React', 'PHP/Laravel', 'MySQL', 'UI/UX Design'],
-    tbsm: ['Engine Overhaul', 'Fuel Injection', 'Kelistrikan', 'Suspensi', 'Bisnis Otomotif'],
-    akl: ['MYOB', 'Spreadsheet', 'Perpajakan', 'Perbankan', 'Laporan Keuangan'],
+    tkr: ['Diagnosis Mesin Injeksi', 'Overhaul Transmisi', 'Kelistrikan Bodi & AC', 'Sistem Rem & Chasis', 'Standar Bengkel Resmi'],
+    tsm: ['Tune-up Mesin FI', 'Overhaul Mesin Matic', 'Troubleshooting Kelistrikan', 'Rangka & Suspensi', 'Bisnis Bengkel Mandiri'],
+    titl: ['Instalasi Penerangan', 'Panel Tenaga 3 Fasa', 'Motor Listrik Industri', 'Otomasi Kendali PLC', 'Smart Building Installation'],
+    dkv: ['Desain Grafis Branding', 'Fotografi Studio', 'Videografi & Sinematografi', 'Motion Graphic 2D/3D', 'UI/UX & Social Media'],
   };
   return skills[majorId] || [];
 }

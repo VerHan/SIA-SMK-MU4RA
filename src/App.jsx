@@ -44,7 +44,16 @@ function safeLazy(importFn) {
 /* Layout Components (Eager Load agar layout cepat tampil) */
 import DashboardLayout from './components/layout/DashboardLayout';
 import MobileLayout from './components/mobile/MobileLayout';
+import PublicLayout from './components/layout/PublicLayout';
 import ProtectedRoute from './components/shared/ProtectedRoute';
+
+/* ── Public Website Pages (Lazy Loading) ── */
+const HomePage = safeLazy(() => import('./pages/public/HomePage'));
+const ProfilPage = safeLazy(() => import('./pages/public/ProfilPage'));
+const KejuruanPage = safeLazy(() => import('./pages/public/KejuruanPage'));
+const BeritaPage = safeLazy(() => import('./pages/public/BeritaPage'));
+const BeritaDetailPage = safeLazy(() => import('./pages/public/BeritaDetailPage'));
+const PPDBPage = safeLazy(() => import('./pages/public/PPDBPage'));
 
 /* ── SIA Admin Pages (Lazy Loading dengan Safe Retry) ── */
 const LoginPage = safeLazy(() => import('./pages/public/LoginPage'));
@@ -85,7 +94,7 @@ const MobileSettingsPage = safeLazy(() => import('./pages/mobile/MobileSettingsP
 const MOBILE_ROLES = ['guru', 'staff', 'kepsek'];
 
 /**
- * RootRedirect — Mengarahkan pengguna berdasarkan role
+ * RootRedirect — Mengarahkan pengguna berdasarkan role saat buka /portal atau /dashboard
  */
 function RootRedirect() {
   const { isAuthenticated, isLoading, user } = useAuth();
@@ -115,9 +124,19 @@ export default function App() {
           <BrowserRouter>
             <Suspense fallback={<LoadingSpinner />}>
               <Routes>
-                {/* Root Path (/) langsung mengarahkan ke Login/Dashboard */}
-                <Route path="/" element={<RootRedirect />} />
+                {/* ── PUBLIC WEBSITE ROUTES (/) ── */}
+                <Route element={<PublicLayout />}>
+                  <Route path="/" element={<HomePage />} />
+                  <Route path="/profil" element={<ProfilPage />} />
+                  <Route path="/kejuruan" element={<KejuruanPage />} />
+                  <Route path="/berita" element={<BeritaPage />} />
+                  <Route path="/berita/:id" element={<BeritaDetailPage />} />
+                  <Route path="/ppdb" element={<PPDBPage />} />
+                </Route>
+
+                {/* Portal Login Guru & Admin */}
                 <Route path="/login" element={<LoginPage />} />
+
 
                 {/* ── MOBILE CLIENT ROUTES (/app/*) ── */}
                 <Route

@@ -51,20 +51,26 @@ app.get('/api/ping', async (req, res) => {
 });
 
 // --- KEEP ALIVE BOT ENDPOINTS ---
-app.post('/api/keep-alive/ping', async (req, res) => {
+app.all('/api/keep-alive/ping', async (req, res) => {
   try {
     const authHeader = req.headers.authorization;
-    const { pingType, triggeredBy, note } = req.body;
+    const querySecret = req.query.secret;
+    const isGet = req.method === 'GET';
+    const pingType = isGet ? (req.query.pingType || 'AUTO_BOT') : (req.body?.pingType || 'AUTO_BOT');
+    const triggeredBy = isGet ? (req.query.triggeredBy || 'CRON_BOT') : (req.body?.triggeredBy || 'CRON_BOT');
+    const note = isGet ? (req.query.note || 'Automated Keep-Alive Ping (GET)') : (req.body?.note || 'Automated Keep-Alive Ping (POST)');
     
-    // Simple verification for CRON bot
-    if (pingType === 'AUTO_BOT') {
+    // Verification for CRON bot if CRON_SECRET is configured
+    if (pingType === 'AUTO_BOT' && process.env.CRON_SECRET) {
       const cronSecret = process.env.CRON_SECRET;
-      if (cronSecret && authHeader !== `Bearer ${cronSecret}`) {
-        return res.status(401).json({ error: 'Unauthorized CRON request' });
+      const isBearerMatch = authHeader && authHeader === `Bearer ${cronSecret}`;
+      const isQueryMatch = querySecret && querySecret === cronSecret;
+      if (!isBearerMatch && !isQueryMatch) {
+        return res.status(401).json({ success: false, error: 'Unauthorized CRON request: Token rahasia CRON_SECRET tidak cocok' });
       }
     }
 
-    // Insert heartbeat record
+    // Insert heartbeat record to wake up and query database
     const record = await prisma.systemHeartbeat.create({
       data: {
         pingType: pingType || 'MANUAL_ADMIN',
@@ -73,7 +79,12 @@ app.post('/api/keep-alive/ping', async (req, res) => {
       }
     });
 
-    res.status(200).json({ success: true, record });
+    res.status(200).json({
+      success: true,
+      message: '⚡ Supabase Database is awake and active!',
+      timestamp: new Date().toISOString(),
+      record
+    });
   } catch (error) {
     console.error('Keep-Alive Ping Error:', error);
     res.status(500).json({ success: false, error: error.message });

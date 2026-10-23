@@ -1,24 +1,131 @@
-name: Supabase Keep-Alive Ping
+name: Supabase Keep-Alive Ping Bot
 
 on:
   schedule:
-    # Berjalan setiap 3 hari sekali pada jam 00:00 UTC
-    - cron: '0 0 */3 * *'
-  workflow_dispatch: # Mengizinkan eksekusi manual via GitHub UI
+    # Berjalan setiap 2 hari sekali pada jam 01:00 UTC (08:00 WIB)
+    # Supabase Free Tier auto-pause setelah 7 hari inaktif. 2 hari sekali sangat aman & hemat kuota.
+    - cron: '0 1 */2 * *'
+  workflow_dispatch: # Mengizinkan eksekusi manual kapan saja via tombol "Run workflow" di GitHub UI
 
 jobs:
-  ping-database:
+  keep-alive:
+    name: Ping Supabase & Vercel
     runs-on: ubuntu-latest
+    environment: production
     steps:
-      - name: Ping Keep-Alive API
+      - name: Jalankan Ping Database Keep-Alive
         env:
-          # Pastikan Anda telah mengatur Repository Secrets di GitHub:
-          # 1. CRON_SECRET: Token rahasia yang sama dengan yang di Vercel/Supabase
-          # 2. API_URL: URL backend Anda (misal: https://domain-anda.vercel.app)
-          CRON_SECRET: ${{ secrets.CRON_SECRET }}
           API_URL: ${{ secrets.API_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
         run: |
-          curl -X POST "${API_URL}/api/keep-alive/ping" \
-          -H "Content-Type: application/json" \
-          -H "Authorization: Bearer ${CRON_SECRET}" \
-          -d '{"pingType": "AUTO_BOT", "triggeredBy": "CRON_WORKER", "note": "Automated 3-day ping from GitHub Actions"}'
+          echo "========================================================"
+          echo "🤖 MEMULAI SUPABASE KEEP-ALIVE BOT"
+          echo "Waktu Eksekusi: $(date -u)"
+          echo "========================================================"
+
+          SUCCESS=false
+
+          # -----------------------------------------------------------
+          # METODE 1: DIRECT PING KE SUPABASE REST / AUTH API (JIKA ADA)
+          # -----------------------------------------------------------
+          if [ -n "$SUPABASE_URL" ]; then
+            echo ""
+            echo "📡 [Metode 1] Menghubungi Supabase API langsung..."
+            CLEAN_SUPA_URL="${SUPABASE_URL%/}"
+            [[ $CLEAN_SUPA_URL != http* ]] && CLEAN_SUPA_URL="https://$CLEAN_SUPA_URL"
+
+            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+              --connect-timeout 20 \
+              --max-time 45 \
+              -H "apikey: ${SUPABASE_ANON_KEY}" \
+              "${CLEAN_SUPA_URL}/auth/v1/health" || echo "000")
+
+            echo "Status HTTP Supabase: $HTTP_CODE"
+            if [ "$HTTP_CODE" -ge 200 ] && [ "$HTTP_CODE" -lt 400 ]; then
+              echo "✅ Supabase REST API berhasil di-ping dan tetap aktif!"
+              SUCCESS=true
+            else
+              echo "⚠️ Supabase direct ping response: $HTTP_CODE (mencoba jalur Vercel)"
+            fi
+          fi
+
+          # -----------------------------------------------------------
+          # METODE 2: PING KE ENDPOINT VERCEL BACKEND (/api/keep-alive/ping)
+          # -----------------------------------------------------------
+          if [ -n "$API_URL" ]; then
+            echo ""
+            echo "📡 [Metode 2] Menghubungi Backend Vercel Keep-Alive..."
+            CLEAN_API_URL="${API_URL%/}"
+            [[ $CLEAN_API_URL != http* ]] && CLEAN_API_URL="https://$CLEAN_API_URL"
+
+            PING_ENDPOINT="${CLEAN_API_URL}/api/keep-alive/ping"
+            echo "Target URL: $PING_ENDPOINT"
+
+            # Siapkan header Authorization jika CRON_SECRET terisi
+            AUTH_HEADER=""
+            if [ -n "$CRON_SECRET" ]; then
+              AUTH_HEADER="Authorization: Bearer $CRON_SECRET"
+            fi
+
+            # Eksekusi POST request ke /api/keep-alive/ping
+            HTTP_RESPONSE=$(curl -s -w "\nHTTP_STATUS:%{http_code}" \
+              --connect-timeout 25 \
+              --max-time 60 \
+              --retry 2 \
+              --retry-delay 5 \
+              -X POST "$PING_ENDPOINT" \
+              -H "Content-Type: application/json" \
+              ${AUTH_HEADER:+-H "$AUTH_HEADER"} \
+              -d '{"pingType": "AUTO_BOT", "triggeredBy": "GITHUB_ACTIONS_BOT", "note": "Automated 2-day keep-alive ping"}')
+
+            BODY=$(echo "$HTTP_RESPONSE" | sed -e '$d')
+            HTTP_STATUS=$(echo "$HTTP_RESPONSE" | tail -n1 | sed 's/HTTP_STATUS://')
+
+            echo "Response Status: $HTTP_STATUS"
+            echo "Response Body: $BODY"
+
+            if [ "$HTTP_STATUS" -eq 200 ]; then
+              echo "✅ Backend database berhasil mencatat heartbeat dan Supabase aktif!"
+              SUCCESS=true
+            else
+              echo "⚠️ POST ke /api/keep-alive/ping mengembalikan status $HTTP_STATUS."
+              echo "Mencoba fallback GET ke /api/ping..."
+              
+              FALLBACK_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+                --connect-timeout 20 \
+                --max-time 30 \
+                "${CLEAN_API_URL}/api/ping" || echo "000")
+                
+              echo "Fallback /api/ping Status: $FALLBACK_STATUS"
+              if [ "$FALLBACK_STATUS" -eq 200 ]; then
+                echo "✅ Fallback ping berhasil! Database Supabase bangun."
+                SUCCESS=true
+              fi
+            fi
+          fi
+
+          # -----------------------------------------------------------
+          # DIAGNOSTIK JIKA SEMUA METODE BELUM BERHASIL
+          # -----------------------------------------------------------
+          echo ""
+          echo "========================================================"
+          if [ "$SUCCESS" = true ]; then
+            echo "🎉 SUKSES: Bot berhasil membangunkan dan menjaga Supabase tetap aktif!"
+            echo "========================================================"
+            exit 0
+          else
+            echo "❌ GAGAL: Bot tidak dapat menghubungi Supabase atau Vercel!"
+            echo ""
+            echo "🔍 PANDUAN PENGECEKAN REPOSITORY SECRETS DI GITHUB:"
+            echo "1. Buka repository GitHub Anda di browser."
+            echo "2. Masuk ke: Settings -> Secrets and variables -> Actions."
+            echo "3. Pastikan Secret berikut telah ditambahkan di bagian 'Repository secrets':"
+            echo "   - API_URL        : URL Vercel website Anda (contoh: https://sia-smk-mu4ra.vercel.app)"
+            echo "   - CRON_SECRET    : Token rahasia yang sama jika diatur di Environment Vercel"
+            echo "   - SUPABASE_URL   : (Opsional) URL Project Supabase Anda (https://xxx.supabase.co)"
+            echo "   - SUPABASE_ANON_KEY : (Opsional) Anon Public Key dari Dashboard Supabase"
+            echo "========================================================"
+            exit 1
+          fi

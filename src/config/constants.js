@@ -4,13 +4,29 @@
 
 export const SCHOOL_INFO = {
   name: 'SMK Muhammadiyah 04 Bangsri',
-  shortName: 'SIA SMK MU4RA',
-  description: 'Sistem Informasi Akademik & Presensi Internal Sekolah',
-  address: 'Bangsri, Jepara, Jawa Tengah',
-  phone: '(0291) 000-000',
+  shortName: 'SMK MU4RA',
+  description: 'Sistem Informasi Akademik & Media Resmi Sekolah',
+  address: 'Wedelan, Kec. Bangsri, Kab. Jepara, Jawa Tengah 59453',
+  phone: '(0291) 772-1044',
   email: 'info@smkmuh04bangsri.sch.id',
   website: 'https://smkmuh04bangsri.sch.id',
+  visi: 'Menjadi SMK Unggul Berbasis Karakter Islami, Berjiwa Wirausaha, dan Berdaya Saing Global di Era Industri Modern.',
+  misi: [
+    'Menyelenggarakan pendidikan kejuruan berlandaskan nilai-nilai Al-Islam dan Kemuhammadiyahan.',
+    'Menerapkan kurikulum berbasis industri dan teknologi terkini yang relevan dengan kebutuhan dunia kerja.',
+    'Membina jiwa kewirausahaan (technopreneurship) yang mandiri, kreatif, dan inovatif.',
+    'Mewujudkan iklim sekolah yang asri, disiplin, berakhlak mulia, dan berwawasan lingkungan.',
+  ],
 };
+
+/* --- Navigasi Publik Website Profil --- */
+export const PUBLIC_NAV_ITEMS = [
+  { label: 'Beranda', path: '/' },
+  { label: 'Profil', path: '/profil' },
+  { label: 'Kejuruan', path: '/kejuruan' },
+  { label: 'Berita', path: '/berita' },
+  { label: 'Pendaftaran PPDB', path: '/ppdb' },
+];
 
 /* --- Koordinat GPS Lokasi Sekolah & Geofencing --- */
 export const SCHOOL_GEOFENCE = {
@@ -24,6 +40,7 @@ export const USER_ROLES = {
   ADMIN: 'admin',
   GURU: 'guru',
   STAFF: 'staff',
+  KEPSEK: 'kepsek',
   WALI_MURID: 'wali_murid',
 };
 
@@ -31,6 +48,7 @@ export const ROLE_LABELS = {
   [USER_ROLES.ADMIN]: 'Administrator',
   [USER_ROLES.GURU]: 'Guru',
   [USER_ROLES.STAFF]: 'Staff Tata Usaha',
+  [USER_ROLES.KEPSEK]: 'Kepala Sekolah',
   [USER_ROLES.WALI_MURID]: 'Wali Murid',
 };
 
@@ -197,36 +215,60 @@ export const TEACHER_ATTENDANCE_STATUS = [
 
 export const JURUSAN_LIST = [
   {
-    id: 'tkj',
-    shortName: 'TKJ',
-    name: 'Teknik Komputer & Jaringan',
-    description: 'Mempelajari instalasi jaringan komputer, konfigurasi router & server, fiber optik, dan administrasi sistem.',
-    icon: 'monitor',
-    color: '#3B82F6'
+    id: 'tkr',
+    shortName: 'TKR',
+    name: 'Teknik Kendaraan Ringan',
+    description: 'Keahlian teknik diagnosis mesin mobil, transmisi, overhaul sistem injeksi, kelistrikan bodi, dan standarisasi manajemen bengkel resmi modern.',
+    image: '/images/jurusan_tkr.jpg',
+    badge: 'Otomotif Roda 4',
+    icon: 'car',
+    color: '#EF4444',
+    certBadge: '🏆 Sertifikasi BNSP Otomotif',
+    partnerBadge: '🚗 Rekanan Bengkel Resmi & ATPM',
+    employmentRate: '96% Siap Kerja & Wirausaha',
+    highlights: ['Diagnosis Mesin Mobil Injeksi', 'Overhaul Transmisi & Chasis', 'Kelistrikan Bodi & AC Mobil', 'Standarisasi Bengkel Resmi Astra/Daihatsu']
   },
   {
-    id: 'rpl',
-    shortName: 'RPL',
-    name: 'Rekayasa Perangkat Lunak',
-    description: 'Fokus pada pengembangan aplikasi web, mobile, basis data, dan rekayasa perangkat lunak modern.',
-    icon: 'code-2',
-    color: '#10B981'
-  },
-  {
-    id: 'tbsm',
-    shortName: 'TBSM',
-    name: 'Teknik Bisnis Sepeda Motor',
-    description: 'Kompetensi teknik perawatan, perbaikan mesin sepeda motor berteknologi injeksi, dan manajemen bengkel.',
+    id: 'tsm',
+    shortName: 'TSM',
+    name: 'Teknik Sepeda Motor',
+    description: 'Kompetensi perawatan, tune-up, dan perbaikan mesin sepeda motor berteknologi injeksi (PGM-FI), rangka, kelistrikan, serta wirausaha bengkel mandiri.',
+    image: '/images/jurusan_tsm.jpg',
+    badge: 'Otomotif Roda 2',
     icon: 'wrench',
-    color: '#F59E0B'
+    color: '#F59E0B',
+    certBadge: '🏍️ Uji Kompetensi Injeksi EFI',
+    partnerBadge: '🛠️ Standar Servis Honda & Yamaha',
+    employmentRate: '94% Siap Kerja & Wirausaha',
+    highlights: ['Perawatan Mesin Injeksi (FI)', 'Bongkar Pasang Transmisi Matic & Manual', 'Troubleshooting Kelistrikan Motor', 'Kewirausahaan Bengkel Roda Dua']
   },
   {
-    id: 'akl',
-    shortName: 'AKL',
-    name: 'Akuntansi & Keuangan Lembaga',
-    description: 'Pengelolaan siklus akuntansi perusahaan, perbankan syariah/konvensional, perpajakan, dan aplikasi spreadsheet.',
-    icon: 'bar-chart',
-    color: '#8B5CF6'
+    id: 'titl',
+    shortName: 'TITL',
+    name: 'Teknik Instalasi Tenaga Listrik',
+    description: 'Penguasaan instalasi penerangan gedung bertingkat, perakitan panel distribusi daya 3 fasa, motor listrik industri, dan sistem otomasi kendali PLC.',
+    image: '/images/jurusan_titl.jpg',
+    badge: 'Kelistrikan & Otomasi',
+    icon: 'zap',
+    color: '#0284C7',
+    certBadge: '⚡ Standar Sertifikasi PLN & K3',
+    partnerBadge: '🏭 Panel Otomasi & PLC Pabrik',
+    employmentRate: '95% Siap Kerja Industri & BUMN',
+    highlights: ['Instalasi Penerangan Gedung', 'Perakitan Panel Daya 3 Fasa', 'Kontrol Motor Listrik Industri', 'Sistem Otomasi Kendali PLC & Smart Home']
+  },
+  {
+    id: 'dkv',
+    shortName: 'DKV',
+    name: 'Desain Komunikasi Visual',
+    description: 'Pengembangan kreativitas desain grafis, fotografi studio, videografi komersial, animasi digital, editing, dan periklanan media digital modern.',
+    image: '/images/jurusan_dkv.jpg',
+    badge: 'Kreatif & Multimedia',
+    icon: 'camera',
+    color: '#8B5CF6',
+    certBadge: '🎨 Standar Industri Adobe Creative',
+    partnerBadge: '💼 Kerjasama Agensi & Studio Desain',
+    employmentRate: '93% Siap Kerja Agensi & Freelance',
+    highlights: ['Desain Grafis & Digital Branding', 'Fotografi & Videografi Studio', 'Motion Graphic & Animasi 2D/3D', 'Desain Konten Media Sosial & UI/UX']
   }
 ];
 
