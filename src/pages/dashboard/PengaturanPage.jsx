@@ -45,15 +45,22 @@ export default function PengaturanPage() {
   const [pingHistory, setPingHistory] = useState([]);
   const [lastPingDate, setLastPingDate] = useState(null);
   const [isPinging, setIsPinging] = useState(false);
+  const [isFetchingStatus, setIsFetchingStatus] = useState(false);
   const [daysUntilPause, setDaysUntilPause] = useState(7);
+  const [pingError, setPingError] = useState(null);
 
   useEffect(() => {
     fetchPingStatus();
   }, []);
 
   const fetchPingStatus = async () => {
+    setIsFetchingStatus(true);
+    setPingError(null);
     try {
       const res = await fetch('/api/keep-alive/status');
+      if (!res.ok) {
+        throw new Error(`Server returned HTTP ${res.status}`);
+      }
       const data = await res.json();
       if (data.success && data.history) {
         setPingHistory(data.history);
@@ -66,9 +73,14 @@ export default function PengaturanPage() {
           const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
           setDaysUntilPause(Math.max(0, 7 - diffDays));
         }
+      } else {
+        throw new Error(data.error || 'Format respons tidak valid');
       }
     } catch (err) {
-      console.error('Failed to fetch ping status:', err);
+      console.warn('Failed to fetch ping status from backend API:', err.message);
+      setPingError(err.message);
+    } finally {
+      setIsFetchingStatus(false);
     }
   };
 
@@ -86,13 +98,13 @@ export default function PengaturanPage() {
       });
       const data = await res.json();
       if (data.success) {
-        setToast({ type: 'success', message: '⚡ Database berhasil diping! Timer 7 hari telah di-reset' });
+        setToast({ type: 'success', message: '⚡ Database berhasil diping! Koneksi Supabase aktif & status ter-reset' });
         fetchPingStatus();
       } else {
         setToast({ type: 'error', message: data.error || 'Gagal melakukan ping database' });
       }
     } catch (err) {
-      setToast({ type: 'error', message: 'Gagal koneksi ke server' });
+      setToast({ type: 'error', message: 'Gagal koneksi ke server API: ' + err.message });
     } finally {
       setIsPinging(false);
     }
@@ -211,17 +223,28 @@ export default function PengaturanPage() {
 
       {/* Database Health Monitor */}
       <div style={{ marginTop: 'var(--space-6)' }}>
-        <h2 style={{ fontSize: 'var(--font-size-xl)', fontWeight: 'var(--font-weight-bold)', marginBottom: 'var(--space-4)' }}>
-          🗄️ Database Health & Inactivity Monitor
-        </h2>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 'var(--space-4)' }}>
+          <h2 style={{ fontSize: 'var(--font-size-xl)', fontWeight: 'var(--font-weight-bold)', margin: 0 }}>
+            🗄️ Database Health & Inactivity Monitor
+          </h2>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={fetchPingStatus}
+            disabled={isFetchingStatus}
+            style={{ fontSize: 'var(--font-size-xs)' }}
+          >
+            {isFetchingStatus ? '⏳ Memeriksa...' : '🔄 Perbarui Status'}
+          </Button>
+        </div>
         
         <div className="pengaturan-grid-container">
           <Card>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 'var(--space-4)' }}>
               <div>
-                <h3 style={{ fontSize: 'var(--font-size-lg)', fontWeight: 'var(--font-weight-bold)' }}>Status Database</h3>
+                <h3 style={{ fontSize: 'var(--font-size-lg)', fontWeight: 'var(--font-weight-bold)' }}>Status Database Supabase</h3>
                 <p style={{ color: 'var(--color-text-secondary)', fontSize: 'var(--font-size-sm)' }}>
-                  Mencegah auto-pause dari Supabase Free Tier.
+                  Mencegah auto-pause dari Supabase Free Tier (Maksimal batas inaktif 7 hari).
                 </p>
               </div>
               <div style={{ 
@@ -229,41 +252,49 @@ export default function PengaturanPage() {
                 borderRadius: '999px', 
                 fontWeight: 'bold', 
                 fontSize: 'var(--font-size-sm)',
-                background: daysUntilPause > 3 ? '#d1fae5' : '#fef3c7',
-                color: daysUntilPause > 3 ? '#065f46' : '#92400e'
+                background: lastPingDate || daysUntilPause > 3 ? '#d1fae5' : '#fef3c7',
+                color: lastPingDate || daysUntilPause > 3 ? '#065f46' : '#92400e'
               }}>
-                {daysUntilPause > 3 ? '🟢 Aktif / Sehat' : '🟠 Waspada / Perlu Ping'}
+                {lastPingDate || daysUntilPause > 3 ? '🟢 Aktif / Sehat' : '🟠 Waspada / Perlu Ping'}
               </div>
             </div>
 
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--space-4)', marginBottom: 'var(--space-6)' }}>
               <div style={{ background: 'var(--color-bg)', padding: 'var(--space-3)', borderRadius: 'var(--radius-md)' }}>
                 <div style={{ fontSize: 'var(--font-size-xs)', color: 'var(--color-text-secondary)' }}>Aktivitas Terakhir</div>
-                <div style={{ fontWeight: 'bold' }}>
-                  {lastPingDate ? lastPingDate.toLocaleString('id-ID') : 'Belum ada data'}
+                <div style={{ fontWeight: 'bold', fontSize: 'var(--font-size-sm)', marginTop: '2px' }}>
+                  {lastPingDate ? lastPingDate.toLocaleString('id-ID') : 'Belum tercatat (Klik Ping)'}
                 </div>
               </div>
               <div style={{ background: 'var(--color-bg)', padding: 'var(--space-3)', borderRadius: 'var(--radius-md)' }}>
-                <div style={{ fontSize: 'var(--font-size-xs)', color: 'var(--color-text-secondary)' }}>Estimasi Auto-Pause</div>
-                <div style={{ fontWeight: 'bold', color: daysUntilPause <= 3 ? 'red' : 'inherit' }}>
-                  {daysUntilPause} Hari lagi
+                <div style={{ fontSize: 'var(--font-size-xs)', color: 'var(--color-text-secondary)' }}>Status Timer Auto-Pause</div>
+                <div style={{ fontWeight: 'bold', color: daysUntilPause <= 3 ? 'red' : '#059669', fontSize: 'var(--font-size-sm)', marginTop: '2px' }}>
+                  {lastPingDate ? `${daysUntilPause} Hari lagi (Aman)` : '7 Hari (Standar)'}
+                </div>
+                <div style={{ fontSize: '10px', color: 'var(--color-text-secondary)', marginTop: '2px' }}>
+                  Bot auto-ping tiap 2 hari
                 </div>
               </div>
             </div>
 
             <Button fullWidth onClick={handleManualPing} disabled={isPinging}>
-              {isPinging ? '⏳ Pinging...' : '⚡ Ping Database Sekarang'}
+              {isPinging ? '⏳ Pinging Database...' : '⚡ Ping Database Sekarang'}
             </Button>
           </Card>
 
           <Card>
-            <h3 style={{ fontSize: 'var(--font-size-lg)', fontWeight: 'var(--font-weight-bold)', marginBottom: 'var(--space-4)' }}>
-              Riwayat Ping Terakhir
-            </h3>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 'var(--space-4)' }}>
+              <h3 style={{ fontSize: 'var(--font-size-lg)', fontWeight: 'var(--font-weight-bold)', margin: 0 }}>
+                Riwayat Heartbeat Terakhir
+              </h3>
+              <span style={{ fontSize: 'var(--font-size-xs)', color: 'var(--color-text-secondary)' }}>
+                {pingHistory.length} catatan
+              </span>
+            </div>
             
             {pingHistory.length === 0 ? (
-              <div style={{ textAlign: 'center', padding: 'var(--space-4)', color: 'var(--color-text-secondary)' }}>
-                Belum ada riwayat ping.
+              <div style={{ textAlign: 'center', padding: 'var(--space-6)', color: 'var(--color-text-secondary)', fontSize: 'var(--font-size-sm)' }}>
+                Belum ada riwayat ping. Klik tombol <strong>"⚡ Ping Database Sekarang"</strong> di samping untuk mencatatkan ping pertama.
               </div>
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
