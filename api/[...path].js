@@ -56,16 +56,17 @@ app.all('/api/keep-alive/ping', async (req, res) => {
     const authHeader = req.headers.authorization;
     const querySecret = req.query.secret;
     const isGet = req.method === 'GET';
+    const isVercelCron = (req.headers['user-agent'] || '').includes('vercel-cron');
     const pingType = isGet ? (req.query.pingType || 'AUTO_BOT') : (req.body?.pingType || 'AUTO_BOT');
-    const triggeredBy = isGet ? (req.query.triggeredBy || 'CRON_BOT') : (req.body?.triggeredBy || 'CRON_BOT');
-    const note = isGet ? (req.query.note || 'Automated Keep-Alive Ping (GET)') : (req.body?.note || 'Automated Keep-Alive Ping (POST)');
+    let triggeredBy = isVercelCron ? 'Vercel Cron (Daily)' : (isGet ? (req.query.triggeredBy || 'CRON_BOT') : (req.body?.triggeredBy || 'CRON_BOT'));
+    let note = isVercelCron ? 'Automated daily ping from Vercel' : (isGet ? (req.query.note || 'Automated Keep-Alive Ping (GET)') : (req.body?.note || 'Automated Keep-Alive Ping (POST)'));
     
     // Verification for CRON bot if CRON_SECRET is configured
     if (pingType === 'AUTO_BOT' && process.env.CRON_SECRET) {
       const cronSecret = process.env.CRON_SECRET;
       const isBearerMatch = authHeader && authHeader === `Bearer ${cronSecret}`;
       const isQueryMatch = querySecret && querySecret === cronSecret;
-      if (!isBearerMatch && !isQueryMatch) {
+      if (!isBearerMatch && !isQueryMatch && !isVercelCron) {
         return res.status(401).json({ success: false, error: 'Unauthorized CRON request: Token rahasia CRON_SECRET tidak cocok' });
       }
     }
