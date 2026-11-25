@@ -1,90 +1,105 @@
 /* ============================================================
    Auth Context — Manajemen State Autentikasi
    
-   Menyediakan state login/logout, data user, dan role 
-   ke seluruh komponen melalui React Context.
+   Menyimpan token sesi dan profil user murni di memori React/JS
+   (tidak menyimpan token JWT atau kredensial di localStorage).
    ============================================================ */
 
 import { createContext, useState, useCallback, useEffect } from 'react';
-import { loginUser as apiLogin } from '../services/api';
+import { loginUser as apiLogin, getCurrentUser } from '../services/api';
+import { setAuthToken, clearAuthToken, getAuthToken } from '../services/authToken';
 
-/* Key untuk localStorage — jangan ubah agar session tetap konsisten */
-const AUTH_STORAGE_KEY = 'sia_smk_mu4ra_auth';
+const LEGACY_STORAGE_KEY = 'sia_smk_mu4ra_auth';
 
-/* Buat context */
 export const AuthContext = createContext(null);
 
-/**
- * AuthProvider — Bungkus komponen root dengan provider ini
- * agar semua child bisa mengakses auth state.
- */
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
 
-  /* Cek session yang tersimpan saat pertama kali mount */
   useEffect(() => {
+    /* Bersihkan penyimpanan sesi lama di localStorage jika masih tersisa */
     try {
-      const stored = localStorage.getItem(AUTH_STORAGE_KEY);
-      if (stored) {
-        const parsed = JSON.parse(stored);
-        /* Validasi sederhana: pastikan data punya id dan role */
-        if (parsed && parsed.id && parsed.role) {
-          setUser(parsed);
-        } else {
-          localStorage.removeItem(AUTH_STORAGE_KEY);
-        }
-      }
+      localStorage.removeItem(LEGACY_STORAGE_KEY);
     } catch {
-      /* Data corrupt — hapus dan mulai fresh */
-      localStorage.removeItem(AUTH_STORAGE_KEY);
-    } finally {
-      setIsLoading(false);
+      /* Abaikan jika storage tidak tersedia */
     }
+
+    let cancelled = false;
+    async function verifyExistingMemorySession() {
+      if (!getAuthToken()) {
+        if (!cancelled) setIsLoading(false);
+        return;
+      }
+      try {
+        const res = await getCurrentUser();
+        if (!cancelled) {
+          if (res?.success && res.user) {
+            setUser(res.user);
+          } else {
+            clearAuthToken();
+            setUser(null);
+          }
+        }
+      } catch {
+        if (!cancelled) {
+          clearAuthToken();
+          setUser(null);
+        }
+      } finally {
+        if (!cancelled) setIsLoading(false);
+      }
+    }
+
+    verifyExistingMemorySession();
+
+    const handleExpired = () => {
+      clearAuthToken();
+      setUser(null);
+    };
+    window.addEventListener('sia-auth-expired', handleExpired);
+    return () => {
+      cancelled = true;
+      window.removeEventListener('sia-auth-expired', handleExpired);
+    };
   }, []);
 
-  /**
-   * Login — autentikasi user
-   * @param {string} username
-   * @param {string} password
-   * @returns {Promise<{ success: boolean, error?: string }>}
-   */
   const login = useCallback(async (username, password) => {
     setIsLoading(true);
     try {
       const result = await apiLogin(username, password);
       if (result.success && result.user) {
+        if (result.token) {
+          setAuthToken(result.token);
+        }
         setUser(result.user);
-        localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(result.user));
         return { success: true, user: result.user };
       }
+      clearAuthToken();
       return { success: false, error: result.error || 'Username atau password salah.' };
-    } catch (err) {
+    } catch {
+      clearAuthToken();
       return { success: false, error: 'Terjadi kesalahan jaringan. Coba lagi.' };
     } finally {
       setIsLoading(false);
     }
   }, []);
 
-  /**
-   * Logout — hapus session dan redirect
-   */
   const logout = useCallback(() => {
+    clearAuthToken();
     setUser(null);
-    localStorage.removeItem(AUTH_STORAGE_KEY);
+    try {
+      localStorage.removeItem(LEGACY_STORAGE_KEY);
+    } catch {
+      /* Abaikan */
+    }
   }, []);
 
-  /**
-   * Cek apakah user memiliki salah satu role yang diizinkan
-   * @param {string[]} allowedRoles - Array role yang diizinkan
-   * @returns {boolean}
-   */
   const hasRole = useCallback((allowedRoles) => {
     if (!user) return false;
     return allowedRoles.includes(user.role);
   }, [user]);
 
-  /* Value yang akan disediakan ke seluruh app */
   const value = {
     user,
     isAuthenticated: !!user,

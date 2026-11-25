@@ -9,6 +9,7 @@ import Badge from '../../components/ui/Badge';
 import Button from '../../components/ui/Button';
 import LoadingSpinner from '../../components/ui/LoadingSpinner';
 import StudentDetailModal from '../../components/ui/StudentDetailModal';
+import Toast from '../../components/ui/Toast';
 
 export default function AbsensiPage() {
   const [activeTab, setActiveTab] = useState('piket'); // 'piket' | 'mapel'
@@ -40,6 +41,7 @@ export default function AbsensiPage() {
   // Modal States
   const [selectedProfileId, setSelectedProfileId] = useState(null);
   const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
+  const [toast, setToast] = useState(null);
 
   const openStudentProfile = (studentId) => {
     setSelectedProfileId(studentId);
@@ -51,7 +53,7 @@ export default function AbsensiPage() {
       setClasses(clsData);
       setSubjects(subData);
       if (clsData.length > 0) setSelectedClass(clsData[0].name);
-      if (subData.length > 0) setSelectedSubject(subData[0].name);
+      if (subData.length > 0) setSelectedSubject(subData[0].nama || subData[0].name || '');
 
       const activeYear = yearsData.find(y => y.isActive);
       if (activeYear && activeYear.startDate && activeYear.endDate) {
@@ -271,7 +273,7 @@ export default function AbsensiPage() {
     }
 
     if (exportData.length === 0) {
-      alert('Tidak ada data absensi untuk diekspor pada filter ini.');
+      setToast({ message: 'Tidak ada data absensi untuk diekspor pada filter ini.', type: 'warning' });
       return;
     }
 
@@ -485,6 +487,7 @@ export default function AbsensiPage() {
 
   return (
     <div style={{ animation: 'fadeIn 300ms ease' }}>
+      {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 'var(--space-6)', flexWrap: 'wrap', gap: 'var(--space-3)' }}>
         <div>
           <h1 style={{ fontSize: 'var(--font-size-2xl)', fontWeight: 'var(--font-weight-extrabold)', marginBottom: '4px' }}>
@@ -607,7 +610,10 @@ export default function AbsensiPage() {
                   background: 'var(--color-surface)', minWidth: '200px',
                 }}
               >
-                {subjects.map(s => <option key={s.id} value={s.name}>{s.name}</option>)}
+                {subjects.map(s => {
+                  const label = s.nama || s.name;
+                  return <option key={s.id} value={label}>{label}</option>;
+                })}
               </select>
             </div>
           )}

@@ -13,10 +13,15 @@ export default class ErrorBoundary extends React.Component {
   componentDidCatch(error, errorInfo) {
     console.error('[ErrorBoundary] Caught error:', error, errorInfo);
 
+    const msg = error?.message || '';
     const isChunkError =
-      error?.message?.includes('Failed to fetch dynamically imported module') ||
-      error?.message?.includes('Importing a module script failed') ||
-      error?.message?.includes('error loading dynamically imported module') ||
+      msg.includes('Failed to fetch dynamically imported module') ||
+      msg.includes('Importing a module script failed') ||
+      msg.includes('error loading dynamically imported module') ||
+      msg.includes("reading 'useState'") ||
+      msg.includes("reading 'useContext'") ||
+      msg.includes("reading 'useRef'") ||
+      msg.includes("reading 'useEffect'") ||
       error?.name === 'ChunkLoadError';
 
     if (isChunkError) {
@@ -72,6 +77,10 @@ export default class ErrorBoundary extends React.Component {
         errorMsg.includes('Failed to fetch dynamically imported module') ||
         errorMsg.includes('Importing a module script failed') ||
         errorMsg.includes('error loading dynamically imported module') ||
+        errorMsg.includes("reading 'useState'") ||
+        errorMsg.includes("reading 'useContext'") ||
+        errorMsg.includes("reading 'useRef'") ||
+        errorMsg.includes("reading 'useEffect'") ||
         this.state.error?.name === 'ChunkLoadError';
 
       return (

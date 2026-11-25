@@ -172,7 +172,30 @@ export const DASHBOARD_NAV_ITEMS = [
     roles: [USER_ROLES.GURU, USER_ROLES.ADMIN],
   },
 
+  /* === PUBLIKASI & PPDB === */
+  {
+    label: 'Manajemen Berita',
+    path: '/dashboard/berita',
+    icon: 'newspaper',
+    group: 'Publikasi & PPDB',
+    roles: [USER_ROLES.ADMIN, USER_ROLES.STAFF],
+  },
+  {
+    label: 'Verifikasi PPDB',
+    path: '/dashboard/ppdb',
+    icon: 'file-check',
+    group: 'Publikasi & PPDB',
+    roles: [USER_ROLES.ADMIN, USER_ROLES.STAFF],
+  },
+
   /* === SISTEM === */
+  {
+    label: 'Manajemen Akun',
+    path: '/dashboard/akun',
+    icon: 'users',
+    group: 'Sistem',
+    roles: [USER_ROLES.ADMIN],
+  },
   {
     label: 'Pengaturan',
     path: '/dashboard/pengaturan',

@@ -35,16 +35,27 @@
 <body>
   <div id="root"></div>
   <script type="module" src="/src/main.jsx"></script>
-
-  <!-- Service Worker Registration -->
   <script>
-    if ('serviceWorker' in navigator) {
-      window.addEventListener('load', () => {
-        navigator.serviceWorker.register('/sw.js')
-          .then(reg => console.log('[SW] Registered:', reg.scope))
-          .catch(err => console.log('[SW] Registration failed:', err));
-      });
-    }
+    (function () {
+      if (!('serviceWorker' in navigator)) return;
+      var isDev = !!document.querySelector('script[src="/src/main.jsx"]');
+      if (!isDev) return;
+      if (navigator.serviceWorker.controller && !sessionStorage.getItem('dev_sw_cleaned')) {
+        sessionStorage.setItem('dev_sw_cleaned', '1');
+        Promise.all([
+          navigator.serviceWorker.getRegistrations().then(function (regs) {
+            return Promise.all(regs.map(function (r) { return r.unregister(); }));
+          }),
+          'caches' in window
+            ? caches.keys().then(function (keys) {
+                return Promise.all(keys.map(function (k) { return caches.delete(k); }));
+              })
+            : Promise.resolve(),
+        ]).finally(function () {
+          window.location.reload();
+        });
+      }
+    })();
   </script>
 </body>
 </html>

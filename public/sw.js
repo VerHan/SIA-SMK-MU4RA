@@ -1,89 +1,79 @@
 /* ============================================================
-   Service Worker — Smart PWA Caching Strategy
-   
-   - Network-First for HTML/Navigation & API (always fresh on deploy)
-   - Stale-While-Revalidate for static assets
-   - Safe offline fallback
+   Service Worker — Safe PWA Caching Strategy (v4)
+
+   - Never intercepts Vite dev modules (/src/, /node_modules/, /@vite/)
+   - Never caches authenticated /api/ or /dashboard routes
+   - Network-First for HTML navigation
+   - Cache-First only for hashed production /assets/ and static icons/images
    ============================================================ */
 
-const CACHE_NAME = 'sia-smk-mu4ra-v3';
+const CACHE_NAME = 'sia-smk-mu4ra-v4';
 
-/* Assets static offline baseline */
 const STATIC_ASSETS = [
   '/manifest.json',
   '/favicon.svg',
 ];
 
-/* Message listener for immediate cache clearing & update control */
 self.addEventListener('message', (event) => {
   if (event.data && event.data.type === 'SKIP_WAITING') {
     self.skipWaiting();
   }
   if (event.data && event.data.type === 'CLEAR_CACHE') {
-    caches.keys().then(keys => Promise.all(keys.map(k => caches.delete(k))));
+    caches.keys().then((keys) => Promise.all(keys.map((k) => caches.delete(k))));
   }
 });
 
-/* Install — skip waiting immediately */
 self.addEventListener('install', (event) => {
   event.waitUntil(
     caches.open(CACHE_NAME)
-      .then(cache => cache.addAll(STATIC_ASSETS).catch(() => {}))
+      .then((cache) => cache.addAll(STATIC_ASSETS).catch(() => {}))
       .then(() => self.skipWaiting())
   );
 });
 
-/* Activate — clean up all previous cache versions */
 self.addEventListener('activate', (event) => {
   event.waitUntil(
-    caches.keys().then(keys =>
-      Promise.all(
-        keys
-          .filter(key => key !== CACHE_NAME)
-          .map(key => caches.delete(key))
+    caches.keys()
+      .then((keys) =>
+        Promise.all(
+          keys
+            .filter((key) => key !== CACHE_NAME)
+            .map((key) => caches.delete(key))
+        )
       )
-    ).then(() => self.clients.claim())
+      .then(() => self.clients.claim())
   );
 });
 
-/* Fetch strategy */
 self.addEventListener('fetch', (event) => {
   const { request } = event;
 
-  /* Skip non-GET and chrome-extension requests */
   if (request.method !== 'GET' || !request.url.startsWith('http')) return;
 
   const url = new URL(request.url);
 
-  /* 0. Khusus Rute Admin Dashboard (/dashboard/*) -> Bypassed sepenuhnya dari Service Worker agar selalu live dari server */
-  if (url.pathname.startsWith('/dashboard')) {
+  /* Bypass cross-origin requests */
+  if (url.origin !== self.location.origin) return;
+
+  /* 0. Never intercept dev server modules, API routes, or admin dashboard routes */
+  if (
+    url.pathname.startsWith('/api/') ||
+    url.pathname.startsWith('/dashboard') ||
+    url.pathname.startsWith('/src/') ||
+    url.pathname.startsWith('/node_modules/') ||
+    url.pathname.startsWith('/@')
+  ) {
     return;
   }
 
-  /* 1. API Requests -> Network First */
-  if (url.pathname.startsWith('/api/')) {
-    event.respondWith(
-      fetch(request)
-        .then(response => {
-          if (response.ok) {
-            const clone = response.clone();
-            caches.open(CACHE_NAME).then(cache => cache.put(request, clone));
-          }
-          return response;
-        })
-        .catch(() => caches.match(request))
-    );
-    return;
-  }
-
-  /* 2. Navigation / HTML Requests -> Network First (Critical for avoiding White Screen on new deploy) */
+  /* 1. Navigation / HTML Requests -> Network First */
   if (request.mode === 'navigate' || request.headers.get('accept')?.includes('text/html')) {
     event.respondWith(
       fetch(request)
-        .then(response => {
+        .then((response) => {
           if (response.ok) {
             const clone = response.clone();
-            caches.open(CACHE_NAME).then(cache => cache.put(request, clone));
+            caches.open(CACHE_NAME).then((cache) => cache.put(request, clone));
           }
           return response;
         })
@@ -96,18 +86,25 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  /* 3. Static Assets (JS / CSS / Images) -> Stale While Revalidate / Cache First */
+  /* 2. Only cache hashed production bundles (/assets/) and static public files */
+  const isCacheableStatic =
+    url.pathname.startsWith('/assets/') ||
+    url.pathname.startsWith('/images/') ||
+    url.pathname === '/manifest.json' ||
+    url.pathname === '/favicon.svg';
+
+  if (!isCacheableStatic) return;
+
   event.respondWith(
-    caches.match(request).then(cachedResponse => {
-      const fetchPromise = fetch(request).then(networkResponse => {
-        if (networkResponse.ok && request.url.startsWith(self.location.origin)) {
+    caches.match(request).then((cachedResponse) => {
+      if (cachedResponse) return cachedResponse;
+      return fetch(request).then((networkResponse) => {
+        if (networkResponse.ok) {
           const clone = networkResponse.clone();
-          caches.open(CACHE_NAME).then(cache => cache.put(request, clone));
+          caches.open(CACHE_NAME).then((cache) => cache.put(request, clone));
         }
         return networkResponse;
-      }).catch(() => cachedResponse);
-
-      return cachedResponse || fetchPromise;
+      });
     })
   );
 });

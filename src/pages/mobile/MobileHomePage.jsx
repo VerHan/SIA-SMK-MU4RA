@@ -1,14 +1,16 @@
 /* ============================================================
-   MobileHomePage.jsx — Halaman Utama Mobile Client (v2)
-   Layout: Profil (kiri: salam, kanan: tanggal) →
-           Berita → Status Absen + Jam Ngajar → Grid Fitur
+   MobileHomePage.jsx — Beranda Mobile PWA Guru/Staff/Kepsek
+   Tersinkronisasi dengan Master Sesi, Jadwal, dan Absensi API.
    ============================================================ */
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { useQuery } from '@tanstack/react-query';
 import { useAuth } from '../../hooks/useAuth';
 import {
   getTeacherAttendance,
   getSchedule,
+  getMasterTimeSlots,
   getCachedAttendance,
   setCachedAttendance,
   getJakartaToday,
@@ -31,47 +33,51 @@ function getInitials(name = '') {
 
 function getRoleLabel(role) {
   const labels = {
-    guru: 'Guru', staff: 'Staff TU', kepsek: 'Kepala Sekolah',
-    admin: 'Administrator', wali_murid: 'Wali Murid',
+    guru: 'Guru',
+    staff: 'Staff TU',
+    kepsek: 'Kepala Sekolah',
+    admin: 'Administrator',
+    wali_murid: 'Wali Murid',
   };
   return labels[role] || role;
 }
 
+function parseMinutes(hhmm, fallbackMinutes) {
+  if (!hhmm || typeof hhmm !== 'string' || !hhmm.includes(':')) return fallbackMinutes;
+  const [h, m] = hhmm.split(':').map(Number);
+  if (Number.isNaN(h) || Number.isNaN(m)) return fallbackMinutes;
+  return h * 60 + m;
+}
+
 export default function MobileHomePage() {
   const { user } = useAuth();
+  const navigate = useNavigate();
   const now = new Date();
   const today = getJakartaToday();
   const todayName = DAYS[now.getDay() - 1] || '';
   const nowMinutes = now.getHours() * 60 + now.getMinutes();
 
-  const dateLabel = now.toLocaleDateString('id-ID', { weekday: 'long', day: 'numeric', month: 'short', year: 'numeric' });
-
-  // Inisialisasi status absen langsung dari cache lokal (0ms delay)
   const [absenRecord, setAbsenRecord] = useState(() => getCachedAttendance(user?.name, today));
-  // Jadwal mengajar hari ini
-  const [nextClass, setNextClass] = useState(null);
 
   useEffect(() => {
     if (!user?.name) return;
 
-    // Pastikan data sinkron dari cache terbaru
     const cached = getCachedAttendance(user.name, today);
     if (cached) setAbsenRecord(cached);
 
-    // Fetch absen record hari ini di background
-    getTeacherAttendance(today, user.name).then(data => {
+    getTeacherAttendance(today, user.name, user.teacherId).then(data => {
       const rec = Array.isArray(data)
-        ? data.find(r => (r.teacherName === user.name || r.guruName === user.name) && (r.date === today || r.tanggal === today))
-        : (data?.teacherName === user.name ? data : null);
+        ? data.find(
+            r => (r.teacherId === user.teacherId || r.teacherName === user.name || r.guruName === user.name)
+              && (r.date === today || r.tanggal === today)
+          )
+        : null;
       if (rec) {
         setAbsenRecord(rec);
         setCachedAttendance(user.name, today, rec);
       }
-    }).catch(err => {
-      console.warn('Background attendance fetch error in Home:', err);
-    });
+    }).catch(() => {});
 
-    // Dengarkan event pembaruan presensi dari menu Absen GPS
     const handleUpdate = (e) => {
       if (e.detail?.teacherName === user.name && e.detail?.date === today) {
         setAbsenRecord(e.detail.record);
@@ -79,112 +85,111 @@ export default function MobileHomePage() {
     };
     window.addEventListener('sia-attendance-updated', handleUpdate);
     return () => window.removeEventListener('sia-attendance-updated', handleUpdate);
-  }, [user?.name, today]);
+  }, [user?.name, user?.teacherId, today]);
 
-  // Fetch jadwal mengajar hari ini → cari kelas berikutnya / sedang berlangsung
-  useEffect(() => {
-    if (user?.name && todayName) {
-      getSchedule(todayName).then(schedules => {
-        const mySchedules = schedules
-          .filter(s => s.teacher === user.name)
-          .sort((a, b) => (a.jamKe || 0) - (b.jamKe || 0));
+  const { data: todaySchedules = [] } = useQuery({
+    queryKey: ['mobile-schedule-today', todayName],
+    queryFn: () => getSchedule(todayName),
+    enabled: Boolean(todayName),
+    staleTime: 60 * 1000,
+  });
 
-        if (mySchedules.length === 0) return;
+  const { data: timeSlots = [] } = useQuery({
+    queryKey: ['master-sesi'],
+    queryFn: getMasterTimeSlots,
+    staleTime: 5 * 60 * 1000,
+  });
 
-        // Ambil jadwal berikutnya atau yang sedang berlangsung
-        // Estimasi: jam ke-1 = 07:00, setiap jam = 45 menit
-        const withTime = mySchedules.map(s => {
-          const jamKe = s.jamKe || 1;
-          const startMinute = 7 * 60 + (jamKe - 1) * 45; // 07:00 + (n-1)*45mnt
-          const endMinute = startMinute + 45;
-          return { ...s, startMinute, endMinute };
-        });
+  const nextClass = useMemo(() => {
+    if (!user?.name || todaySchedules.length === 0) return null;
+    const mySchedules = todaySchedules
+      .filter(s => (user.teacherId && s.teacherId === user.teacherId) || s.teacher === user.name)
+      .sort((a, b) => (a.jamKe || 0) - (b.jamKe || 0));
 
-        // Prioritas: yang sedang berlangsung dulu, lalu berikutnya
-        const ongoing = withTime.find(s => nowMinutes >= s.startMinute && nowMinutes < s.endMinute);
-        if (ongoing) { setNextClass({ ...ongoing, status: 'ongoing' }); return; }
+    if (mySchedules.length === 0) return null;
 
-        const upcoming = withTime.find(s => s.startMinute > nowMinutes);
-        if (upcoming) { setNextClass({ ...upcoming, status: 'upcoming' }); return; }
+    const withTime = mySchedules.map(s => {
+      const jamKe = Number(s.jamKe) || 1;
+      const slot = timeSlots.find(t => t.type === 'pelajaran' && Number(t.jamKe) === jamKe);
+      const fallbackStart = 7 * 60 + (jamKe - 1) * 45;
+      const startMinute = parseMinutes(slot?.start, fallbackStart);
+      const endMinute = parseMinutes(slot?.end, startMinute + 45);
+      const timeLabel = slot?.start ? `${slot.start}–${slot.end}` : `Jam ${jamKe}`;
+      return { ...s, startMinute, endMinute, timeLabel };
+    });
 
-        // Semua sudah selesai → tampilkan terakhir
-        const last = withTime[withTime.length - 1];
-        setNextClass({ ...last, status: 'done' });
-      });
-    }
-  }, [user?.name, todayName, nowMinutes]);
+    const ongoing = withTime.find(s => nowMinutes >= s.startMinute && nowMinutes < s.endMinute);
+    if (ongoing) return { ...ongoing, status: 'ongoing' };
 
-  // Format start time dari jamKe
-  function formatJamKe(jamKe) {
-    const totalMinutes = 7 * 60 + ((jamKe || 1) - 1) * 45;
-    const h = Math.floor(totalMinutes / 60);
-    const m = totalMinutes % 60;
-    return `${String(h).padStart(2, '0')}.${String(m).padStart(2, '0')}`;
-  }
+    const upcoming = withTime.find(s => s.startMinute > nowMinutes);
+    if (upcoming) return { ...upcoming, status: 'upcoming' };
+
+    return { ...withTime[withTime.length - 1], status: 'done' };
+  }, [todaySchedules, timeSlots, user?.name, user?.teacherId, nowMinutes]);
 
   const absenStatus = absenRecord
-    ? { label: 'Sudah Absen', value: absenRecord.timeIn || '--:--', color: '#22D3EE', dotColor: '#22D3EE' }
-    : { label: 'Belum Absen', value: 'Tap absen', color: '#F59E0B', dotColor: '#F59E0B' };
+    ? { label: 'Sudah Absen', sub: `Masuk ${absenRecord.timeIn || '--:--'}`, color: '#059669', border: '#A7F3D0', bg: '#ECFDF5' }
+    : { label: 'Belum Absen', sub: 'Ketuk untuk absen GPS', color: '#B45309', border: '#FDE68A', bg: '#FFFBEB' };
 
-  const classStatusConfig = {
-    ongoing: { badge: 'Sedang Mengajar', badgeColor: '#22D3EE' },
-    upcoming: { badge: 'Berikutnya', badgeColor: '#818CF8' },
-    done: { badge: 'Selesai', badgeColor: 'rgba(255,255,255,0.35)' },
+  const classStatusLabel = {
+    ongoing: { text: 'Sedang Berlangsung', color: '#059669' },
+    upcoming: { text: 'Jadwal Berikutnya', color: '#2563EB' },
+    done: { text: 'Selesai Hari Ini', color: '#64748B' },
   };
 
   return (
-    <div style={{ paddingTop: '8px', paddingBottom: '20px', animation: 'fadeInUp 0.35s ease' }}>
-
-      {/* ── PROFIL CARD ── */}
+    <div style={{ paddingTop: '8px', paddingBottom: '20px', animation: 'fadeInUp 0.25s ease' }}>
+      {/* Profil Ringkas */}
       <div style={{
         margin: '0 16px 14px',
-        padding: '16px 18px',
-        borderRadius: '18px',
-        background: 'rgba(255,255,255,0.8)',
-        border: '1px solid rgba(0,0,0,0.06)',
-        boxShadow: '0 4px 16px rgba(0,0,0,0.03)',
+        padding: '14px 16px',
+        borderRadius: '16px',
+        background: '#FFFFFF',
+        border: '1px solid #E2E8F0',
         display: 'flex',
         alignItems: 'center',
-        gap: '13px',
+        gap: '12px',
       }}>
-        {/* Avatar */}
         <div style={{
-          width: '52px', height: '52px', borderRadius: '16px', flexShrink: 0,
-          background: 'linear-gradient(135deg, #3B82F6, #6366F1)',
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-          fontSize: '18px', fontWeight: 700, color: 'white',
+          width: '48px',
+          height: '48px',
+          borderRadius: '14px',
+          flexShrink: 0,
+          background: '#2563EB',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          fontSize: '16px',
+          fontWeight: 700,
+          color: 'white',
         }}>
           {user?.avatar
-            ? <img src={user.avatar} alt="foto" style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: '16px' }} />
+            ? <img src={user.avatar} alt="foto" style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: '14px' }} />
             : getInitials(user?.name)}
         </div>
 
-        {/* Left: greeting + name + role */}
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontSize: '11px', color: '#64748B', marginBottom: '1px' }}>
-            {getGreeting()}
+          <div style={{ fontSize: '11px', color: '#64748B' }}>
+            {getGreeting()} · {getRoleLabel(user?.role)}
           </div>
           <div style={{
-            fontSize: '15px', fontWeight: 700, color: '#0F172A',
-            lineHeight: 1.3, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+            fontSize: '15px',
+            fontWeight: 700,
+            color: '#0F172A',
+            lineHeight: 1.3,
+            whiteSpace: 'nowrap',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
           }}>
             {user?.name?.split(',')[0] || 'Pengguna'}
           </div>
-          <span style={{
-            display: 'inline-block', padding: '1px 8px', borderRadius: '20px',
-            background: 'rgba(59,130,246,0.1)', border: '1px solid rgba(59,130,246,0.2)',
-            fontSize: '10px', fontWeight: 500, color: '#2563EB', marginTop: '3px',
-          }}>
-            {getRoleLabel(user?.role)}
-          </span>
         </div>
 
-        {/* Right: hari + tanggal */}
-        <div style={{ textAlign: 'right', flexShrink: 0 }}>
-          <div style={{ fontSize: '11px', color: '#64748B', marginBottom: '2px' }}>
+        <div style={{ textAlign: 'right', flexShrink: 0, fontVariantNumeric: 'tabular-nums' }}>
+          <div style={{ fontSize: '11px', color: '#64748B' }}>
             {now.toLocaleDateString('id-ID', { weekday: 'long' })}
           </div>
-          <div style={{ fontSize: '18px', fontWeight: 700, color: '#0F172A', lineHeight: 1 }}>
+          <div style={{ fontSize: '18px', fontWeight: 800, color: '#0F172A', lineHeight: 1.1 }}>
             {now.getDate()}
           </div>
           <div style={{ fontSize: '11px', color: '#94A3B8' }}>
@@ -193,93 +198,89 @@ export default function MobileHomePage() {
         </div>
       </div>
 
-      {/* ── SLIDER BERITA ── */}
+      {/* Slider Berita */}
       <div style={{ marginBottom: '14px' }}>
         <NewsSlider />
       </div>
 
-      {/* ── STATUS ABSEN + JAM NGAJAR ── */}
-      <div style={{ margin: '0 16px 16px', display: 'flex', gap: '10px' }}>
-
-        {/* Status Absen */}
-        <div style={{
-          flex: 1,
-          padding: '13px 14px',
-          borderRadius: '14px',
-          background: 'rgba(255, 255, 255, 0.8)',
-          boxShadow: '0 4px 16px rgba(0,0,0,0.02)',
-          border: `1px solid ${absenRecord ? 'rgba(34,211,238,0.4)' : 'rgba(245,158,11,0.4)'}`,
-        }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '5px' }}>
-            <div style={{
-              width: '6px', height: '6px', borderRadius: '50%',
-              background: absenStatus.dotColor,
-              boxShadow: `0 0 6px ${absenStatus.dotColor}`,
-            }} />
-            <span style={{ fontSize: '10px', color: '#64748B', fontWeight: 500, letterSpacing: '0.3px' }}>
-              STATUS ABSEN
-            </span>
+      {/* Status Absen + Jam Mengajar (Interactive >= 44px touch targets) */}
+      <div style={{ margin: '0 16px 16px', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+        <button
+          type="button"
+          onClick={() => navigate('/app/absen-gps')}
+          style={{
+            textAlign: 'left',
+            minHeight: '84px',
+            padding: '12px 14px',
+            borderRadius: '14px',
+            background: absenStatus.bg,
+            border: `1px solid ${absenStatus.border}`,
+            cursor: 'pointer',
+          }}
+        >
+          <div style={{ fontSize: '10px', color: '#64748B', fontWeight: 700, letterSpacing: '0.04em', marginBottom: '4px' }}>
+            ABSENSI GPS
           </div>
-          <div style={{ fontSize: '13px', fontWeight: 700, color: absenStatus.color }}>
+          <div style={{ fontSize: '13px', fontWeight: 800, color: absenStatus.color }}>
             {absenStatus.label}
           </div>
-          <div style={{ fontSize: '11px', color: '#64748B', marginTop: '1px' }}>
-            {absenRecord ? `Masuk ${absenRecord.timeIn}` : 'Belum tercatat'}
+          <div style={{ fontSize: '11px', color: '#475569', marginTop: '2px', fontVariantNumeric: 'tabular-nums' }}>
+            {absenStatus.sub}
           </div>
-        </div>
+        </button>
 
-        {/* Jam Ngajar Berikutnya */}
-        <div style={{
-          flex: 1,
-          padding: '13px 14px',
-          borderRadius: '14px',
-          background: 'rgba(255, 255, 255, 0.8)',
-          boxShadow: '0 4px 16px rgba(0,0,0,0.02)',
-          border: nextClass
-            ? `1px solid ${nextClass.status === 'ongoing' ? 'rgba(34,211,238,0.4)' : 'rgba(129,140,248,0.4)'}`
-            : '1px solid rgba(0,0,0,0.06)',
-        }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '5px' }}>
-            <div style={{
-              width: '6px', height: '6px', borderRadius: '50%',
-              background: nextClass ? (nextClass.status === 'ongoing' ? '#22D3EE' : '#818CF8') : 'rgba(0,0,0,0.2)',
-            }} />
-            <span style={{ fontSize: '10px', color: '#64748B', fontWeight: 500, letterSpacing: '0.3px' }}>
-              JAM MENGAJAR
-            </span>
+        <button
+          type="button"
+          onClick={() => navigate('/app/jadwal')}
+          style={{
+            textAlign: 'left',
+            minHeight: '84px',
+            padding: '12px 14px',
+            borderRadius: '14px',
+            background: '#FFFFFF',
+            border: '1px solid #E2E8F0',
+            cursor: 'pointer',
+          }}
+        >
+          <div style={{ fontSize: '10px', color: '#64748B', fontWeight: 700, letterSpacing: '0.04em', marginBottom: '4px' }}>
+            JAM MENGAJAR
           </div>
           {nextClass ? (
             <>
-              <div style={{ fontSize: '13px', fontWeight: 700, color: '#0F172A' }}>
-                {formatJamKe(nextClass.jamKe)} — {nextClass.class}
+              <div style={{ fontSize: '13px', fontWeight: 800, color: '#0F172A', fontVariantNumeric: 'tabular-nums' }}>
+                {nextClass.class} · {nextClass.timeLabel}
               </div>
               <div style={{
-                fontSize: '10px', marginTop: '1px',
-                color: classStatusConfig[nextClass.status]?.badgeColor || '#64748B',
-                fontWeight: 500,
+                fontSize: '11px',
+                marginTop: '2px',
+                color: classStatusLabel[nextClass.status]?.color || '#64748B',
+                fontWeight: 600,
+                whiteSpace: 'nowrap',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
               }}>
-                {nextClass.subject} · {classStatusConfig[nextClass.status]?.badge}
+                {nextClass.subject}
               </div>
             </>
           ) : (
             <>
-              <div style={{ fontSize: '13px', fontWeight: 600, color: '#64748B' }}>
-                Tidak ada
+              <div style={{ fontSize: '13px', fontWeight: 700, color: '#475569' }}>
+                Tidak ada jadwal
               </div>
-              <div style={{ fontSize: '10px', color: '#94A3B8', marginTop: '1px' }}>
-                Jadwal hari ini kosong
+              <div style={{ fontSize: '11px', color: '#94A3B8', marginTop: '2px' }}>
+                Ketuk lihat jadwal mingguan
               </div>
             </>
           )}
-        </div>
+        </button>
       </div>
 
-      {/* ── GRID FITUR ── */}
+      {/* Grid Fitur */}
       <FeatureGrid />
 
       <style>{`
         @keyframes fadeInUp {
-          from { opacity: 0; transform: translateY(12px); }
+          from { opacity: 0; transform: translateY(8px); }
           to   { opacity: 1; transform: translateY(0); }
         }
       `}</style>

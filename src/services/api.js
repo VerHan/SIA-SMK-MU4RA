@@ -1,357 +1,289 @@
 /* ============================================================
-   API Service Layer — Pure SIA Operations
+   API Service Layer — Unified Backend Integration
+   Semua operasi membaca dan menulis melalui endpoint /api/*
+   dengan header Authorization Bearer dari memori JS.
    ============================================================ */
 
 import {
-  MOCK_STUDENTS,
-  MOCK_TEACHERS,
-  MOCK_CLASSES,
-  MOCK_SCHEDULE,
-  MOCK_ATTENDANCE,
   MOCK_PRAYER_ATTENDANCE,
   MOCK_PAYMENTS,
-  MOCK_GRADES,
-  MOCK_NEWS,
-  MOCK_USERS,
-  MOCK_ACADEMIC_YEARS,
-  MOCK_SUBJECTS,
   MOCK_SUBJECT_TEACHERS,
   MOCK_TEACHER_DUTIES,
   MOCK_DUTY_SCHEDULE,
-  MOCK_TEACHER_ATTENDANCE,
-  MOCK_BEHAVIOR_RULES,
-  MOCK_BEHAVIOR_POINTS,
-  MOCK_TIME_SLOTS,
-  MOCK_ACADEMIC_CALENDAR,
-  MOCK_STUDENT_ATTITUDE
+  MOCK_STUDENT_ATTITUDE,
 } from './mockData';
-import { delay, generateId } from '../utils/helpers';
-import { SUBJECT_GROUPS as DEFAULT_SUBJECT_GROUPS, JURUSAN_LIST as DEFAULT_JURUSAN_LIST } from '../config/constants';
-import { getCachedAttendance, setCachedAttendance, getJakartaToday } from './attendanceCache';
+import { generateId } from '../utils/helpers';
+import { getAuthHeaders, notifyAuthExpired } from './authToken';
+import { setCachedAttendance, getJakartaToday } from './attendanceCache';
 export { getCachedAttendance, setCachedAttendance, getJakartaToday } from './attendanceCache';
 
-const SIMULATE_DELAY = false;
-const simulateNetwork = () => SIMULATE_DELAY ? delay(150) : Promise.resolve();
-
 /* ============================================================
-   Mutable State (prototype — akan diganti backend)
+   SHARED FETCH HELPER (Bearer Token + JSON Parsing + 401 Handler)
    ============================================================ */
-let studentsList = [...MOCK_STUDENTS];
-let academicYearsList = [...MOCK_ACADEMIC_YEARS];
-let subjectsList = [...MOCK_SUBJECTS];
+async function apiFetch(url, options = {}) {
+  const { headers = {}, body, skipAuthExpiry = false, ...rest } = options;
+  const finalHeaders = getAuthHeaders(headers);
+
+  let finalBody = body;
+  if (body !== undefined && typeof body !== 'string' && !(body instanceof FormData)) {
+    finalHeaders['Content-Type'] = 'application/json';
+    finalBody = JSON.stringify(body);
+  }
+
+  const res = await fetch(url, {
+    ...rest,
+    headers: finalHeaders,
+    body: finalBody,
+  });
+
+  const contentType = res.headers.get('content-type') || '';
+  const isJson = contentType.includes('application/json');
+  const data = isJson ? await res.json().catch(() => null) : null;
+
+  if (res.status === 401 && !skipAuthExpiry) {
+    notifyAuthExpired();
+  }
+
+  return { ok: res.ok, status: res.status, data };
+}
+
+function formatMutationResponse(res, fallbackError = 'Permintaan gagal diproses.') {
+  if (res.ok && res.data && res.data.success !== false) {
+    return res.data;
+  }
+  return {
+    success: false,
+    error: res.data?.error || res.data?.message || (res.status === 401 ? 'Sesi habis. Silakan login ulang.' : res.status === 403 ? 'Anda tidak memiliki izin untuk aksi ini.' : fallbackError),
+  };
+}
+
+/* State lokal ringan untuk modul legacy yang belum punya tabel khusus */
 let subjectTeachersList = [...MOCK_SUBJECT_TEACHERS];
-let subjectGroupsList = [...DEFAULT_SUBJECT_GROUPS];
-let majorsList = (DEFAULT_JURUSAN_LIST || []).map(j => ({
-  id: j.id,
-  kode: j.shortName,
-  nama: j.name,
-  deskripsi: j.description || '',
-  color: j.color || '#3B82F6'
-}));
 let teacherDutiesList = [...MOCK_TEACHER_DUTIES];
 let dutyScheduleList = [...MOCK_DUTY_SCHEDULE];
-let teacherAttendanceList = [...MOCK_TEACHER_ATTENDANCE];
-let subjectAttendanceList = []; // For storing mapel attendance
-let behaviorRulesList = [...MOCK_BEHAVIOR_RULES];
-let behaviorPointsList = [...MOCK_BEHAVIOR_POINTS];
-let classesList = [...MOCK_CLASSES];
-let teachersList = [...MOCK_TEACHERS];
-let attendanceList = [...MOCK_ATTENDANCE];
-let scheduleList = [...MOCK_SCHEDULE];
-let academicCalendarList = [...MOCK_ACADEMIC_CALENDAR];
-let timeSlotsList = [...MOCK_TIME_SLOTS];
 let studentAttitudeList = MOCK_STUDENT_ATTITUDE ? [...MOCK_STUDENT_ATTITUDE] : [];
-let newsList = MOCK_NEWS ? [...MOCK_NEWS] : [];
-let ppdbList = [];
-
-/* Legacy GPS teacher attendance (for AbsenGuruGPSPage) */
-let teacherGPSAttendanceList = [
-  { id: 'tg001', teacherName: 'Ahmad Fauzi, S.Pd.', date: '2024-07-22', timeIn: '06:45', timeOut: '14:00', distanceMeters: 12, isWithinGeofence: true, status: 'Hadir Tepat Waktu' },
-  { id: 'tg002', teacherName: 'Siti Nurhaliza, S.Kom.', date: '2024-07-22', timeIn: '06:52', timeOut: null, distanceMeters: 25, isWithinGeofence: true, status: 'Hadir Tepat Waktu' },
-];
-
 
 /* ============================================================
-   AUTH
+   AUTH & MANAJEMEN AKUN USER
    ============================================================ */
 export async function loginUser(username, password) {
   try {
-    const res = await fetch('/api/auth/login', {
+    const res = await apiFetch('/api/auth/login', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username: username.trim(), password })
+      skipAuthExpiry: true,
+      body: { username: (username || '').trim(), password },
     });
-    /* Pastikan response berisi JSON sebelum parsing */
-    const contentType = res.headers.get('content-type');
-    if (contentType && contentType.includes('application/json')) {
-      const data = await res.json();
-      if (!data.success) {
-        return {
-          success: false,
-          error: data.error || data.message || 'Username atau password salah.'
-        };
-      }
+    if (res.ok && res.data?.success && res.data.user) {
       return {
         success: true,
-        user: data.user
+        token: res.data.token,
+        user: res.data.user,
       };
     }
-    /* Response bukan JSON — fallback ke mock */
-    throw new Error('Backend tidak mengembalikan format JSON');
-  } catch (err) {
-    /* Fallback: gunakan mock data jika backend mati */
-    console.warn('Backend login fallback ke mock:', err.message);
-    await simulateNetwork();
-    const cleanUsername = (username || '').trim().toLowerCase();
-    const user = MOCK_USERS.find(
-      u => u.username.toLowerCase() === cleanUsername && u.password === password
-    );
-    if (user) {
-      const { password: _, ...safeUser } = user;
-      return { success: true, user: safeUser };
-    }
-    return { success: false, error: 'Username atau password salah.' };
+    return {
+      success: false,
+      error: res.data?.error || res.data?.message || 'Username atau password salah.',
+    };
+  } catch {
+    return { success: false, error: 'Gagal menghubungi server autentikasi.' };
   }
 }
 
+export async function getCurrentUser() {
+  try {
+    const res = await apiFetch('/api/auth/me', { skipAuthExpiry: true });
+    if (res.ok && res.data?.success) return res.data;
+    return { success: false };
+  } catch {
+    return { success: false };
+  }
+}
+
+export async function getUsers() {
+  try {
+    const res = await apiFetch('/api/users');
+    if (res.ok && Array.isArray(res.data)) return res.data;
+  } catch (e) {
+    console.error('Failed to get users:', e);
+  }
+  return [];
+}
+
+export async function addUser(data) {
+  try {
+    const res = await apiFetch('/api/users', { method: 'POST', body: data });
+    return formatMutationResponse(res, 'Gagal menambahkan akun.');
+  } catch {
+    return { success: false, error: 'Gagal menghubungi server.' };
+  }
+}
+
+export async function updateUser(id, data) {
+  try {
+    const res = await apiFetch(`/api/users/${encodeURIComponent(id)}`, { method: 'PUT', body: data });
+    return formatMutationResponse(res, 'Gagal memperbarui akun.');
+  } catch {
+    return { success: false, error: 'Gagal menghubungi server.' };
+  }
+}
+
+export async function deleteUser(id) {
+  try {
+    const res = await apiFetch(`/api/users/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    return formatMutationResponse(res, 'Gagal menghapus akun.');
+  } catch {
+    return { success: false, error: 'Gagal menghubungi server.' };
+  }
+}
 
 /* ============================================================
    TAHUN AJAR
    ============================================================ */
 export async function getAcademicYears() {
   try {
-    const res = await fetch('/api/tahun-ajar');
-    const contentType = res.headers.get('content-type');
-    if (res.ok && contentType && contentType.includes('application/json')) {
-      const data = await res.json();
-      if (Array.isArray(data) && data.length > 0) {
-        academicYearsList = data.map(d => ({
-          ...d,
-          startDate: typeof d.startDate === 'string' ? d.startDate.split('T')[0] : d.startDate,
-          endDate: typeof d.endDate === 'string' ? d.endDate.split('T')[0] : d.endDate
-        }));
-        return [...academicYearsList];
-      }
+    const res = await apiFetch('/api/tahun-ajar');
+    if (res.ok && Array.isArray(res.data)) {
+      return res.data.map(d => ({
+        ...d,
+        startDate: typeof d.startDate === 'string' ? d.startDate.split('T')[0] : d.startDate,
+        endDate: typeof d.endDate === 'string' ? d.endDate.split('T')[0] : d.endDate,
+      }));
     }
-  } catch (e) { console.error('Failed to get academic years', e); }
-  return [...academicYearsList];
+  } catch (e) {
+    console.error('Failed to get academic years:', e);
+  }
+  return [];
 }
 
 export async function addAcademicYear(data) {
   try {
-    const res = await fetch('/api/tahun-ajar', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data)
-    });
-    const contentType = res.headers.get('content-type');
-    if (contentType && contentType.includes('application/json')) {
-      const result = await res.json();
-      if (res.ok && result.success !== false) {
-        const saved = result.data || { ...data, id: generateId() };
-        if (saved.isActive) {
-          academicYearsList = academicYearsList.map(y => ({ ...y, isActive: false }));
-        }
-        academicYearsList.unshift(saved);
-        return result;
-      }
-      if (result.error || result.message) return { success: false, error: result.error || result.message };
-    }
-    if (res.ok) return await res.json();
-  } catch (e) { console.warn('Backend addAcademicYear failed, fallback to mock:', e); }
-
-  await simulateNetwork();
-  const shouldBeActive = Boolean(data.isActive);
-  if (shouldBeActive) {
-    academicYearsList = academicYearsList.map(y => ({ ...y, isActive: false }));
+    const res = await apiFetch('/api/tahun-ajar', { method: 'POST', body: data });
+    return formatMutationResponse(res, 'Gagal menambahkan tahun ajar.');
+  } catch {
+    return { success: false, error: 'Gagal menghubungi server.' };
   }
-  const newYear = {
-    id: generateId(),
-    nama: (data.nama || '').trim(),
-    semester: Number(data.semester) || 1,
-    isActive: shouldBeActive,
-    startDate: data.startDate,
-    endDate: data.endDate
-  };
-  academicYearsList.unshift(newYear);
-  return { success: true, data: newYear, message: 'Tahun ajar berhasil ditambahkan (Tersimpan).' };
 }
 
 export async function updateAcademicYear(id, data) {
   try {
-    const res = await fetch(`/api/tahun-ajar/${id}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data)
-    });
-    const contentType = res.headers.get('content-type');
-    if (contentType && contentType.includes('application/json')) {
-      const result = await res.json();
-      if (res.ok && result.success !== false) {
-        const idx = academicYearsList.findIndex(y => y.id === id);
-        if (idx !== -1) {
-          academicYearsList[idx] = { ...academicYearsList[idx], ...data };
-        }
-        return result;
-      }
-      if (result.error || result.message) return { success: false, error: result.error || result.message };
-    }
-    if (res.ok) return await res.json();
-  } catch (e) { console.warn('Backend updateAcademicYear failed, fallback to mock:', e); }
-
-  await simulateNetwork();
-  const idx = academicYearsList.findIndex(y => y.id === id);
-  if (idx !== -1) {
-    academicYearsList[idx] = { ...academicYearsList[idx], ...data };
-    return { success: true, message: 'Tahun ajar berhasil diperbarui (Tersimpan).' };
+    const res = await apiFetch(`/api/tahun-ajar/${encodeURIComponent(id)}`, { method: 'PUT', body: data });
+    return formatMutationResponse(res, 'Gagal memperbarui tahun ajar.');
+  } catch {
+    return { success: false, error: 'Gagal menghubungi server.' };
   }
-  return { success: false, error: 'Tahun ajar tidak ditemukan.' };
 }
 
 export async function deleteAcademicYear(id) {
   try {
-    const res = await fetch(`/api/tahun-ajar/${id}`, { method: 'DELETE' });
-    const contentType = res.headers.get('content-type');
-    if (contentType && contentType.includes('application/json')) {
-      const result = await res.json();
-      if (res.ok && result.success !== false) {
-        academicYearsList = academicYearsList.filter(y => y.id !== id);
-        return result;
-      }
-      if (result.error || result.message) return { success: false, error: result.error || result.message };
-    }
-    if (res.ok) return await res.json();
-  } catch (e) { console.warn('Backend deleteAcademicYear failed, fallback to mock:', e); }
-
-  await simulateNetwork();
-  academicYearsList = academicYearsList.filter(y => y.id !== id);
-  return { success: true, message: 'Tahun ajar berhasil dihapus (Tersimpan).' };
+    const res = await apiFetch(`/api/tahun-ajar/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    return formatMutationResponse(res, 'Gagal menghapus tahun ajar.');
+  } catch {
+    return { success: false, error: 'Gagal menghubungi server.' };
+  }
 }
 
 export async function setActiveAcademicYear(id) {
   try {
-    const res = await fetch(`/api/tahun-ajar/${id}/activate`, { method: 'PUT' });
-    const contentType = res.headers.get('content-type');
-    if (contentType && contentType.includes('application/json')) {
-      const result = await res.json();
-      if (res.ok && result.success !== false) {
-        academicYearsList = academicYearsList.map(y => ({ ...y, isActive: y.id === id }));
-        return result;
-      }
-      if (result.error || result.message) return { success: false, error: result.error || result.message };
-    }
-    if (res.ok) return await res.json();
-  } catch (e) { console.warn('Backend setActiveAcademicYear failed, fallback to mock:', e); }
-
-  await simulateNetwork();
-  academicYearsList = academicYearsList.map(y => ({ ...y, isActive: y.id === id }));
-  return { success: true, message: 'Tahun ajar aktif berhasil diubah (Tersimpan).' };
+    const res = await apiFetch(`/api/tahun-ajar/${encodeURIComponent(id)}/activate`, { method: 'PUT' });
+    return formatMutationResponse(res, 'Gagal mengaktifkan tahun ajar.');
+  } catch {
+    return { success: false, error: 'Gagal menghubungi server.' };
+  }
 }
 
-
 /* ============================================================
-   MATA PELAJARAN
+   MATA PELAJARAN & KELOMPOK
    ============================================================ */
 export async function getSubjects() {
   try {
-    const res = await fetch('/api/mapel');
-    if (res.ok) return await res.json();
-  } catch (e) { console.error('Failed to get subjects', e); }
-  return [...subjectsList];
+    const res = await apiFetch('/api/mapel');
+    if (res.ok && Array.isArray(res.data)) return res.data;
+  } catch (e) {
+    console.error('Failed to get subjects:', e);
+  }
+  return [];
 }
 
 export async function addSubject(data) {
   try {
-    const res = await fetch('/api/mapel', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data)
-    });
-    if (res.ok) return await res.json();
-  } catch (e) { console.error('Failed to add subject', e); }
-  return { success: false, error: 'Gagal menghubungi server' };
+    const res = await apiFetch('/api/mapel', { method: 'POST', body: data });
+    return formatMutationResponse(res, 'Gagal menambahkan mata pelajaran.');
+  } catch {
+    return { success: false, error: 'Gagal menghubungi server.' };
+  }
 }
 
 export async function updateSubject(id, data) {
   try {
-    const res = await fetch(`/api/mapel/${id}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data)
-    });
-    if (res.ok) return await res.json();
-  } catch (e) { console.error('Failed to update subject', e); }
-  return { success: false, error: 'Gagal menghubungi server' };
+    const res = await apiFetch(`/api/mapel/${encodeURIComponent(id)}`, { method: 'PUT', body: data });
+    return formatMutationResponse(res, 'Gagal memperbarui mata pelajaran.');
+  } catch {
+    return { success: false, error: 'Gagal menghubungi server.' };
+  }
 }
 
 export async function deleteSubject(id) {
   try {
-    const res = await fetch(`/api/mapel/${id}`, { method: 'DELETE' });
-    if (res.ok) return await res.json();
-  } catch (e) { console.error('Failed to delete subject', e); }
-  return { success: false, error: 'Gagal menghubungi server' };
+    const res = await apiFetch(`/api/mapel/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    return formatMutationResponse(res, 'Gagal menghapus mata pelajaran.');
+  } catch {
+    return { success: false, error: 'Gagal menghubungi server.' };
+  }
 }
-
-
-/* ============================================================
-   KELOMPOK MATA PELAJARAN (SUBJECT GROUPS)
-   ============================================================ */
 
 export async function getSubjectGroups() {
   try {
-    const res = await fetch('/api/mapel/kelompok');
-    if (res.ok) return await res.json();
-  } catch (e) { console.error('Failed to get subject groups', e); }
-  return [...subjectGroupsList];
+    const res = await apiFetch('/api/mapel/kelompok');
+    if (res.ok && Array.isArray(res.data)) return res.data;
+  } catch (e) {
+    console.error('Failed to get subject groups:', e);
+  }
+  return [];
 }
 
 export async function addSubjectGroup(name) {
   try {
-    const res = await fetch('/api/mapel/kelompok', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name })
-    });
-    if (res.ok) return await res.json();
-  } catch (e) { console.error('Failed to add subject group', e); }
-  return { success: false, error: 'Gagal menghubungi server' };
+    const res = await apiFetch('/api/mapel/kelompok', { method: 'POST', body: { name } });
+    return formatMutationResponse(res, 'Gagal menambahkan kelompok mapel.');
+  } catch {
+    return { success: false, error: 'Gagal menghubungi server.' };
+  }
 }
 
 export async function updateSubjectGroup(oldName, newName) {
   try {
-    const res = await fetch(`/api/mapel/kelompok/${encodeURIComponent(oldName)}`, {
+    const res = await apiFetch(`/api/mapel/kelompok/${encodeURIComponent(oldName)}`, {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ newName })
+      body: { newName },
     });
-    if (res.ok) return await res.json();
-  } catch (e) { console.error('Failed to update subject group', e); }
-  return { success: false, error: 'Gagal menghubungi server' };
+    return formatMutationResponse(res, 'Gagal memperbarui kelompok mapel.');
+  } catch {
+    return { success: false, error: 'Gagal menghubungi server.' };
+  }
 }
 
 export async function deleteSubjectGroup(name) {
   try {
-    const res = await fetch(`/api/mapel/kelompok/${encodeURIComponent(name)}`, { method: 'DELETE' });
-    if (res.ok) return await res.json();
-  } catch (e) { console.error('Failed to delete subject group', e); }
-  return { success: false, error: 'Gagal menghubungi server' };
+    const res = await apiFetch(`/api/mapel/kelompok/${encodeURIComponent(name)}`, { method: 'DELETE' });
+    return formatMutationResponse(res, 'Gagal menghapus kelompok mapel.');
+  } catch {
+    return { success: false, error: 'Gagal menghubungi server.' };
+  }
 }
 
-
 /* ============================================================
-   MAPPING GURU ↔ MAPEL
+   MAPPING GURU ↔ MAPEL, TUGAS GURU & PIKET (Legacy Helper)
    ============================================================ */
 export async function getSubjectTeachers() {
-  await simulateNetwork();
+  const [teachers, subjects] = await Promise.all([getTeachers(), getSubjects()]);
   return subjectTeachersList.map(st => {
-    const guru = teachersList.find(g => g.id === st.guruId);
-    const mapel = subjectsList.find(m => m.id === st.mapelId);
+    const guru = teachers.find(g => g.id === st.guruId);
+    const mapel = subjects.find(m => m.id === st.mapelId);
     return { ...st, guruName: guru?.name || '-', mapelName: mapel?.nama || '-' };
   });
 }
 
 export async function addSubjectTeacher(guruId, mapelId) {
-  await simulateNetwork();
   const exists = subjectTeachersList.find(st => st.guruId === guruId && st.mapelId === mapelId);
   if (exists) return { success: false, error: 'Guru sudah mengampu mapel ini.' };
   const newST = { id: generateId(), guruId, mapelId };
@@ -360,64 +292,50 @@ export async function addSubjectTeacher(guruId, mapelId) {
 }
 
 export async function removeSubjectTeacher(id) {
-  await simulateNetwork();
   subjectTeachersList = subjectTeachersList.filter(st => st.id !== id);
   return { success: true, message: 'Mapel berhasil dihapus dari guru.' };
 }
 
-
-/* ============================================================
-   TUGAS GURU
-   ============================================================ */
 export async function getTeacherDuties(guruIdFilter) {
-  await simulateNetwork();
+  const [teachers, classes] = await Promise.all([getTeachers(), getClasses()]);
   let data = [...teacherDutiesList];
   if (guruIdFilter) data = data.filter(d => d.guruId === guruIdFilter);
   return data.map(d => {
-    const guru = teachersList.find(g => g.id === d.guruId);
-    const kelas = classesList.find(c => c.id === d.kelasId);
+    const guru = teachers.find(g => g.id === d.guruId);
+    const kelas = classes.find(c => c.id === d.kelasId);
     return { ...d, guruName: guru?.name || '-', kelasName: kelas?.name || '-' };
   });
 }
 
 export async function addTeacherDuty(data) {
-  await simulateNetwork();
   const newDuty = { id: generateId(), ...data };
   teacherDutiesList.push(newDuty);
   return { success: true, data: newDuty, message: 'Tugas guru berhasil ditambahkan.' };
 }
 
 export async function deleteTeacherDuty(id) {
-  await simulateNetwork();
   teacherDutiesList = teacherDutiesList.filter(d => d.id !== id);
   return { success: true, message: 'Tugas guru berhasil dihapus.' };
 }
 
-
-/* ============================================================
-   JADWAL PIKET
-   ============================================================ */
 export async function getDutySchedule(hariFilter) {
-  await simulateNetwork();
   let data = [...dutyScheduleList];
   if (hariFilter) data = data.filter(d => d.hari === hariFilter);
   return data;
 }
 
 export async function addDutySchedule(data) {
-  await simulateNetwork();
-  const guru = teachersList.find(g => g.id === data.guruId);
+  const teachers = await getTeachers();
+  const guru = teachers.find(g => g.id === data.guruId);
   const newItem = { id: generateId(), ...data, guruName: guru?.name || '-' };
   dutyScheduleList.push(newItem);
   return { success: true, data: newItem, message: 'Jadwal piket berhasil ditambahkan.' };
 }
 
 export async function deleteDutySchedule(id) {
-  await simulateNetwork();
   dutyScheduleList = dutyScheduleList.filter(d => d.id !== id);
   return { success: true, message: 'Jadwal piket berhasil dihapus.' };
 }
-
 
 /* ============================================================
    STUDENTS (CRUD Master Data Siswa)
@@ -425,600 +343,364 @@ export async function deleteDutySchedule(id) {
 export async function getStudents(classFilter) {
   try {
     const url = classFilter ? `/api/siswa?kelas=${encodeURIComponent(classFilter)}` : '/api/siswa';
-    const res = await fetch(url);
-    if (res.ok) return await res.json();
-  } catch (e) { console.error('Failed to get students', e); }
-  if (classFilter) return studentsList.filter(s => s.class === classFilter);
-  return [...studentsList];
+    const res = await apiFetch(url);
+    if (res.ok && Array.isArray(res.data)) return res.data;
+  } catch (e) {
+    console.error('Failed to get students:', e);
+  }
+  return [];
 }
 
 export async function addStudent(studentData) {
   try {
-    const res = await fetch('/api/siswa', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(studentData)
-    });
-    if (res.ok) return await res.json();
-  } catch (e) { console.error('Failed to add student', e); }
-  return { success: false, error: 'Gagal menghubungi server' };
+    const res = await apiFetch('/api/siswa', { method: 'POST', body: studentData });
+    return formatMutationResponse(res, 'Gagal menambahkan siswa.');
+  } catch {
+    return { success: false, error: 'Gagal menghubungi server.' };
+  }
 }
 
 export async function importStudents(dataArray) {
   try {
-    const res = await fetch('/api/siswa/import', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ data: dataArray })
-    });
-    if (res.ok) return await res.json();
-  } catch (e) { console.error('Failed to import students', e); }
-  return { success: false, error: 'Gagal menghubungi server' };
+    const res = await apiFetch('/api/siswa/import', { method: 'POST', body: { data: dataArray } });
+    return formatMutationResponse(res, 'Gagal mengimpor data siswa.');
+  } catch {
+    return { success: false, error: 'Gagal menghubungi server.' };
+  }
 }
 
 export async function updateStudent(id, studentData) {
   try {
-    const res = await fetch(`/api/siswa/${id}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(studentData)
-    });
-    if (res.ok) return await res.json();
-  } catch (e) { console.error('Failed to update student', e); }
-  return { success: false, error: 'Gagal menghubungi server' };
+    const res = await apiFetch(`/api/siswa/${encodeURIComponent(id)}`, { method: 'PUT', body: studentData });
+    return formatMutationResponse(res, 'Gagal memperbarui data siswa.');
+  } catch {
+    return { success: false, error: 'Gagal menghubungi server.' };
+  }
 }
 
 export async function deleteStudent(id) {
   try {
-    const res = await fetch(`/api/siswa/${id}`, { method: 'DELETE' });
-    if (res.ok) return await res.json();
-  } catch (e) { console.error('Failed to delete student', e); }
-  return { success: false, error: 'Gagal menghubungi server' };
+    const res = await apiFetch(`/api/siswa/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    return formatMutationResponse(res, 'Gagal menghapus siswa.');
+  } catch {
+    return { success: false, error: 'Gagal menghubungi server.' };
+  }
 }
-
 
 /* ============================================================
    TEACHERS (CRUD)
    ============================================================ */
 export async function getTeachers() {
   try {
-    const res = await fetch('/api/guru');
-    if (res.ok) return await res.json();
-  } catch (e) { console.error('Failed to get teachers', e); }
-  return [...teachersList];
+    const res = await apiFetch('/api/guru');
+    if (res.ok && Array.isArray(res.data)) return res.data;
+  } catch (e) {
+    console.error('Failed to get teachers:', e);
+  }
+  return [];
 }
 
 export async function addTeacher(data) {
   try {
-    const res = await fetch('/api/guru', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data)
-    });
-    if (res.ok) return await res.json();
-  } catch (e) { console.error('Failed to add teacher', e); }
-  return { success: false, error: 'Gagal menghubungi server' };
+    const res = await apiFetch('/api/guru', { method: 'POST', body: data });
+    return formatMutationResponse(res, 'Gagal menambahkan guru.');
+  } catch {
+    return { success: false, error: 'Gagal menghubungi server.' };
+  }
 }
 
 export async function updateTeacher(id, data) {
   try {
-    const res = await fetch(`/api/guru/${id}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data)
-    });
-    if (res.ok) return await res.json();
-  } catch (e) { console.error('Failed to update teacher', e); }
-  return { success: false, error: 'Gagal menghubungi server' };
+    const res = await apiFetch(`/api/guru/${encodeURIComponent(id)}`, { method: 'PUT', body: data });
+    return formatMutationResponse(res, 'Gagal memperbarui data guru.');
+  } catch {
+    return { success: false, error: 'Gagal menghubungi server.' };
+  }
 }
 
 export async function deleteTeacher(id) {
   try {
-    const res = await fetch(`/api/guru/${id}`, { method: 'DELETE' });
-    if (res.ok) return await res.json();
-  } catch (e) { console.error('Failed to delete teacher', e); }
-  return { success: false, error: 'Gagal menghubungi server' };
+    const res = await apiFetch(`/api/guru/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    return formatMutationResponse(res, 'Gagal menghapus guru.');
+  } catch {
+    return { success: false, error: 'Gagal menghubungi server.' };
+  }
 }
 
-
 /* ============================================================
-   ABSENSI GURU (GPS GEOFENCING — Realtime Caching & Optimistic)
+   ABSENSI GURU (GPS GEOFENCING & MANUAL ADMIN)
    ============================================================ */
 export async function getTeacherAttendance(dateFilter, teacherName, teacherId) {
   try {
-    let url = '/api/guru/absen';
     const params = new URLSearchParams();
     if (dateFilter) params.append('date', dateFilter);
     if (teacherName) params.append('teacherName', teacherName);
     if (teacherId) params.append('teacherId', teacherId);
-    if (params.toString()) url += '?' + params.toString();
-
-    const res = await fetch(url);
-    const contentType = res.headers.get('content-type');
-    if (res.ok && contentType && contentType.includes('application/json')) {
-      const data = await res.json();
-      // Auto cache jika ada record untuk guru terkait
-      if (Array.isArray(data) && teacherName) {
-        const found = data.find(r => (r.teacherName === teacherName || r.guruName === teacherName) && r.date === (dateFilter || getJakartaToday()));
-        if (found) {
-          setCachedAttendance(teacherName, dateFilter || getJakartaToday(), found);
-        }
+    const qs = params.toString();
+    const res = await apiFetch(`/api/guru/absen${qs ? `?${qs}` : ''}`);
+    if (res.ok && Array.isArray(res.data)) {
+      if (teacherName) {
+        const targetDate = dateFilter || getJakartaToday();
+        const found = res.data.find(
+          r => (r.teacherName === teacherName || r.guruName === teacherName) && (r.date === targetDate || r.tanggal === targetDate)
+        );
+        if (found) setCachedAttendance(teacherName, targetDate, found);
       }
-      return data;
+      return res.data;
     }
-    throw new Error('Backend tidak tersedia');
-  } catch (err) {
-    console.warn('Fallback ke mock data untuk absensi guru:', err.message);
-    /* Fallback ke mock */
-    let data = [...teacherAttendanceList];
-    if (dateFilter) data = data.filter(a => a.tanggal === dateFilter);
-    if (teacherName) data = data.filter(a => a.guruName === teacherName);
-    const mapped = data.map(a => ({
-      id: a.id,
-      teacherId: a.guruId,
-      guruId: a.guruId,
-      teacherName: a.guruName,
-      guruName: a.guruName,
-      date: a.tanggal,
-      tanggal: a.tanggal,
-      status: a.status,
-      timeIn: a.jamMasuk,
-      jamMasuk: a.jamMasuk,
-      timeOut: a.jamPulang,
-      jamPulang: a.jamPulang,
-      source: a.sumber,
-      distanceMeters: a.jarakMeter
-    }));
-
-    if (teacherName && mapped.length > 0) {
-      setCachedAttendance(teacherName, dateFilter || getJakartaToday(), mapped[0]);
-    }
-    return mapped;
+  } catch (e) {
+    console.error('Failed to get teacher attendance:', e);
   }
+  return [];
 }
 
 export async function submitTeacherAttendance({ teacherName, teacherId, type, distanceMeters, isWithinGeofence, coords }) {
   try {
-    const res = await fetch('/api/guru/absen', {
+    const res = await apiFetch('/api/guru/absen', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ teacherName, teacherId, type, distanceMeters, isWithinGeofence, coords })
+      body: { teacherName, teacherId, type, distanceMeters, isWithinGeofence, coords },
     });
-    const contentType = res.headers.get('content-type');
-    if (res.ok && contentType && contentType.includes('application/json')) {
-      const data = await res.json();
-      if (!data.success) {
-        return { success: false, error: data.message, record: data.record };
+    if (res.ok && res.data) {
+      if (!res.data.success) {
+        return { success: false, error: res.data.message || res.data.error, record: res.data.record };
       }
-      if (data.record) {
-        setCachedAttendance(teacherName, data.record.date || getJakartaToday(), data.record);
+      if (res.data.record) {
+        setCachedAttendance(teacherName, res.data.record.date || getJakartaToday(), res.data.record);
       }
-      return { success: true, message: data.message, record: data.record };
+      return { success: true, message: res.data.message, record: res.data.record };
     }
-    throw new Error('Backend tidak tersedia');
-  } catch (err) {
-    console.warn('Fallback untuk submit absensi guru:', err.message);
-    
-    // Implementasi Mock
-    const now = new Date();
-    const today = getJakartaToday();
-    const currentTime = now.toLocaleTimeString('id-ID', { timeZone: 'Asia/Jakarta', hour: '2-digit', minute: '2-digit', hour12: false });
-    
-    const existingIndex = teacherAttendanceList.findIndex(a => a.guruName === teacherName && a.tanggal === today);
-    
-    if (type === 'in') {
-      if (existingIndex !== -1 && teacherAttendanceList[existingIndex].jamMasuk) {
-        return { success: false, error: 'Anda sudah absen masuk hari ini', record: teacherAttendanceList[existingIndex] };
-      }
-      
-      const newRecord = {
-        id: generateId(),
-        guruId: teacherId || 'g_mock',
-        guruName: teacherName,
-        teacherId: teacherId || 'g_mock',
-        teacherName: teacherName,
-        tanggal: today,
-        date: today,
-        status: isWithinGeofence ? 'hadir' : 'luar_radius',
-        sumber: 'gps',
-        source: 'gps',
-        jamMasuk: currentTime,
-        timeIn: currentTime,
-        jamPulang: null,
-        timeOut: null,
-        jarakMeter: distanceMeters,
-        distanceMeters: distanceMeters,
-        keterangan: ''
-      };
-      
-      if (existingIndex !== -1) {
-        teacherAttendanceList[existingIndex] = newRecord;
-      } else {
-        teacherAttendanceList.unshift(newRecord);
-      }
-      
-      setCachedAttendance(teacherName, today, newRecord);
-      return { success: true, message: 'Berhasil Absen Masuk!', record: newRecord };
-      
-    } else if (type === 'out') {
-      if (existingIndex === -1 || !teacherAttendanceList[existingIndex].jamMasuk) {
-        return { success: false, error: 'Anda belum absen masuk' };
-      }
-      if (teacherAttendanceList[existingIndex].jamPulang) {
-        return { success: false, error: 'Anda sudah absen pulang hari ini', record: teacherAttendanceList[existingIndex] };
-      }
-      
-      teacherAttendanceList[existingIndex].jamPulang = currentTime;
-      teacherAttendanceList[existingIndex].timeOut = currentTime;
-
-      setCachedAttendance(teacherName, today, teacherAttendanceList[existingIndex]);
-      return { success: true, message: 'Berhasil Absen Pulang!', record: teacherAttendanceList[existingIndex] };
-    }
-
-    return { success: false, error: 'Tipe absen tidak valid.' };
+    return formatMutationResponse(res, 'Gagal mengirim absensi guru.');
+  } catch {
+    return { success: false, error: 'Gagal menghubungi server.' };
   }
 }
 
-
-/* ============================================================
-   ABSENSI GURU (REKAP ADMIN: GPS + MANUAL)
-   ============================================================ */
 export async function getTeacherAttendanceRecap(dateFilter) {
   try {
-    const url = dateFilter ? `/api/guru/absen?date=${dateFilter}` : '/api/guru/absen';
-    const res = await fetch(url);
-    if (res.ok) return await res.json();
-  } catch (e) { console.error('Failed to get teacher attendance recap', e); }
-  // Fallback
-  await simulateNetwork();
-  let data = [...teacherAttendanceList];
-  if (dateFilter) data = data.filter(a => a.tanggal === dateFilter);
-  return data;
+    const url = dateFilter ? `/api/guru/absen?date=${encodeURIComponent(dateFilter)}` : '/api/guru/absen';
+    const res = await apiFetch(url);
+    if (res.ok && Array.isArray(res.data)) return res.data;
+  } catch (e) {
+    console.error('Failed to get teacher attendance recap:', e);
+  }
+  return [];
 }
 
 export async function submitManualTeacherAttendance(data) {
   try {
-    const res = await fetch('/api/guru/absen/manual', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data)
-    });
-    if (res.ok) return await res.json();
-  } catch (e) { console.error('Failed to submit manual teacher attendance', e); }
-  return { success: false, error: 'Gagal menghubungi server' };
+    const res = await apiFetch('/api/guru/absen/manual', { method: 'POST', body: data });
+    return formatMutationResponse(res, 'Gagal mencatat absensi guru.');
+  } catch {
+    return { success: false, error: 'Gagal menghubungi server.' };
+  }
 }
 
-
 /* ============================================================
-   CLASSES
+   CLASSES & JURUSAN
    ============================================================ */
 export async function getClasses() {
   try {
-    const res = await fetch('/api/kelas');
-    const contentType = res.headers.get('content-type');
-    if (res.ok && contentType && contentType.includes('application/json')) {
-      const data = await res.json();
-      if (Array.isArray(data)) {
-        // Sync local classesList
-        data.forEach(k => {
-          const idx = classesList.findIndex(c => c.id === k.id);
-          if (idx !== -1) classesList[idx] = k;
-          else classesList.push(k);
-        });
-        return data;
-      }
-      if (data && Array.isArray(data.data)) return data.data;
-    }
-  } catch (e) { console.error('Failed to get classes', e); }
-  return [...classesList];
+    const res = await apiFetch('/api/kelas');
+    if (res.ok && Array.isArray(res.data)) return res.data;
+  } catch (e) {
+    console.error('Failed to get classes:', e);
+  }
+  return [];
 }
 
 export async function addClass(data) {
   try {
-    const res = await fetch('/api/kelas', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data)
-    });
-    const contentType = res.headers.get('content-type');
-    if (contentType && contentType.includes('application/json')) {
-      const result = await res.json();
-      if (res.ok && result.success !== false) {
-        const saved = result.data || { ...data, id: generateId() };
-        const idx = classesList.findIndex(c => c.id === saved.id);
-        if (idx !== -1) classesList[idx] = saved;
-        else classesList.push(saved);
-        return result;
-      }
-      if (result.error || result.message) {
-        return { success: false, error: result.error || result.message };
-      }
-    }
-    if (res.ok) return await res.json();
-  } catch (e) { console.warn('Backend addClass failed, fallback to mock:', e); }
-
-  // Fallback ke local mock state jika backend mati / tidak terhubung
-  await simulateNetwork();
-  const upper = (data.name || '').toUpperCase();
-  const detectedMajor = data.major || (upper.includes('TKJ') ? 'TKJ' : upper.includes('RPL') ? 'RPL' : upper.includes('TBSM') ? 'TBSM' : upper.includes('AKL') ? 'AKL' : 'Umum');
-  const newClass = {
-    id: generateId(),
-    name: data.name,
-    grade: data.grade || 'X',
-    major: detectedMajor,
-    teacherId: data.teacherId || null,
-    teacherName: data.teacherName || '-',
-    totalStudents: parseInt(data.totalStudents) || 0
-  };
-  classesList.push(newClass);
-  return { success: true, data: newClass, message: 'Kelas berhasil ditambahkan (Tersimpan).' };
+    const res = await apiFetch('/api/kelas', { method: 'POST', body: data });
+    return formatMutationResponse(res, 'Gagal menambahkan kelas.');
+  } catch {
+    return { success: false, error: 'Gagal menghubungi server.' };
+  }
 }
 
 export async function updateClass(id, data) {
   try {
-    const res = await fetch(`/api/kelas/${id}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data)
-    });
-    const contentType = res.headers.get('content-type');
-    if (contentType && contentType.includes('application/json')) {
-      const result = await res.json();
-      if (res.ok && result.success !== false) {
-        const idx = classesList.findIndex(c => c.id === id);
-        if (idx !== -1) classesList[idx] = { ...classesList[idx], ...data };
-        return result;
-      }
-      if (result.error || result.message) {
-        return { success: false, error: result.error || result.message };
-      }
-    }
-    if (res.ok) return await res.json();
-  } catch (e) { console.warn('Backend updateClass failed, fallback to mock:', e); }
-
-  // Fallback mock
-  await simulateNetwork();
-  const idx = classesList.findIndex(c => c.id === id);
-  if (idx !== -1) {
-    classesList[idx] = { ...classesList[idx], ...data };
-    return { success: true, message: 'Kelas berhasil diperbarui (Tersimpan).' };
+    const res = await apiFetch(`/api/kelas/${encodeURIComponent(id)}`, { method: 'PUT', body: data });
+    return formatMutationResponse(res, 'Gagal memperbarui kelas.');
+  } catch {
+    return { success: false, error: 'Gagal menghubungi server.' };
   }
-  return { success: false, error: 'Kelas tidak ditemukan.' };
 }
 
 export async function deleteClass(id) {
   try {
-    const res = await fetch(`/api/kelas/${id}`, { method: 'DELETE' });
-    const contentType = res.headers.get('content-type');
-    if (contentType && contentType.includes('application/json')) {
-      const result = await res.json();
-      if (res.ok && result.success !== false) {
-        classesList = classesList.filter(c => c.id !== id);
-        return result;
-      }
-      if (result.error || result.message) {
-        return { success: false, error: result.error || result.message };
-      }
-    }
-    if (res.ok) return await res.json();
-  } catch (e) { console.warn('Backend deleteClass failed, fallback to mock:', e); }
-
-  await simulateNetwork();
-  classesList = classesList.filter(c => c.id !== id);
-  return { success: true, message: 'Kelas berhasil dihapus (Tersimpan).' };
+    const res = await apiFetch(`/api/kelas/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    return formatMutationResponse(res, 'Gagal menghapus kelas.');
+  } catch {
+    return { success: false, error: 'Gagal menghubungi server.' };
+  }
 }
 
-
-/* ============================================================
-   JURUSAN / PROGRAM KEAHLIAN (CRUD)
-   ============================================================ */
 export async function getMajors() {
   try {
-    const res = await fetch('/api/jurusan');
-    const contentType = res.headers.get('content-type');
-    if (res.ok && contentType && contentType.includes('application/json')) {
-      const data = await res.json();
-      if (Array.isArray(data) && data.length > 0) {
-        majorsList = data;
-        return [...majorsList];
-      }
-    }
-  } catch (e) { console.error('Failed to get majors', e); }
-  return [...majorsList];
+    const res = await apiFetch('/api/jurusan');
+    if (res.ok && Array.isArray(res.data)) return res.data;
+  } catch (e) {
+    console.error('Failed to get majors:', e);
+  }
+  return [];
 }
 
 export async function addMajor(data) {
   try {
-    const res = await fetch('/api/jurusan', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data)
-    });
-    const contentType = res.headers.get('content-type');
-    if (contentType && contentType.includes('application/json')) {
-      const result = await res.json();
-      if (res.ok && result.success !== false) {
-        const saved = result.data || { ...data, id: generateId() };
-        majorsList.push(saved);
-        return result;
-      }
-      if (result.error || result.message) return { success: false, error: result.error || result.message };
-    }
-    if (res.ok) return await res.json();
-  } catch (e) { console.warn('Backend addMajor failed, fallback to mock:', e); }
-
-  await simulateNetwork();
-  const cleanKode = (data.kode || '').trim().toUpperCase();
-  const cleanNama = (data.nama || '').trim();
-  if (majorsList.some(m => m.kode.toUpperCase() === cleanKode)) {
-    return { success: false, error: `Jurusan dengan kode "${cleanKode}" sudah ada.` };
+    const res = await apiFetch('/api/jurusan', { method: 'POST', body: data });
+    return formatMutationResponse(res, 'Gagal menambahkan jurusan.');
+  } catch {
+    return { success: false, error: 'Gagal menghubungi server.' };
   }
-  const newMajor = {
-    id: generateId(),
-    kode: cleanKode,
-    nama: cleanNama,
-    deskripsi: data.deskripsi || '',
-    color: data.color || '#3B82F6'
-  };
-  majorsList.push(newMajor);
-  return { success: true, data: newMajor, message: 'Jurusan berhasil ditambahkan (Tersimpan).' };
 }
 
 export async function updateMajor(id, data) {
   try {
-    const res = await fetch(`/api/jurusan/${id}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data)
-    });
-    const contentType = res.headers.get('content-type');
-    if (contentType && contentType.includes('application/json')) {
-      const result = await res.json();
-      if (res.ok && result.success !== false) {
-        const idx = majorsList.findIndex(m => m.id === id);
-        if (idx !== -1) majorsList[idx] = { ...majorsList[idx], ...data };
-        return result;
-      }
-      if (result.error || result.message) return { success: false, error: result.error || result.message };
-    }
-    if (res.ok) return await res.json();
-  } catch (e) { console.warn('Backend updateMajor failed, fallback to mock:', e); }
-
-  await simulateNetwork();
-  const cleanKode = (data.kode || '').trim().toUpperCase();
-  const cleanNama = (data.nama || '').trim();
-  const idx = majorsList.findIndex(m => m.id === id);
-  if (idx !== -1) {
-    const oldKode = majorsList[idx].kode;
-    majorsList[idx] = { ...majorsList[idx], ...data, kode: cleanKode, nama: cleanNama };
-    if (oldKode !== cleanKode) {
-      classesList = classesList.map(c => c.major === oldKode ? { ...c, major: cleanKode } : c);
-    }
-    return { success: true, message: 'Jurusan berhasil diperbarui (Tersimpan).' };
+    const res = await apiFetch(`/api/jurusan/${encodeURIComponent(id)}`, { method: 'PUT', body: data });
+    return formatMutationResponse(res, 'Gagal memperbarui jurusan.');
+  } catch {
+    return { success: false, error: 'Gagal menghubungi server.' };
   }
-  return { success: false, error: 'Jurusan tidak ditemukan.' };
 }
 
 export async function deleteMajor(id) {
   try {
-    const res = await fetch(`/api/jurusan/${id}`, { method: 'DELETE' });
-    const contentType = res.headers.get('content-type');
-    if (contentType && contentType.includes('application/json')) {
-      const result = await res.json();
-      if (res.ok && result.success !== false) {
-        majorsList = majorsList.filter(m => m.id !== id);
-        return result;
-      }
-      if (result.error || result.message) return { success: false, error: result.error || result.message };
-    }
-    if (res.ok) return await res.json();
-  } catch (e) { console.warn('Backend deleteMajor failed, fallback to mock:', e); }
-
-  await simulateNetwork();
-  const target = majorsList.find(m => m.id === id);
-  if (!target) return { success: false, error: 'Jurusan tidak ditemukan.' };
-
-  const classCount = classesList.filter(c => c.major === target.kode).length;
-  if (classCount > 0) {
-    return {
-      success: false,
-      error: `Jurusan "${target.kode}" tidak dapat dihapus karena masih digunakan oleh ${classCount} kelas.`
-    };
+    const res = await apiFetch(`/api/jurusan/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    return formatMutationResponse(res, 'Gagal menghapus jurusan.');
+  } catch {
+    return { success: false, error: 'Gagal menghubungi server.' };
   }
-
-  majorsList = majorsList.filter(m => m.id !== id);
-  return { success: true, message: 'Jurusan berhasil dihapus (Tersimpan).' };
 }
 
-
 /* ============================================================
-   SCHEDULE & TIME SLOTS
+   JADWAL PELAJARAN, MASTER SESI & KALENDER AKADEMIK
    ============================================================ */
-
-export async function getSchedule(dayFilter) {
-  await simulateNetwork();
-  if (dayFilter) {
-    return scheduleList.filter(s => s.day === dayFilter);
+export async function getSchedule(dayFilter, classFilter, teacherIdFilter) {
+  try {
+    const params = new URLSearchParams();
+    if (dayFilter) params.set('day', dayFilter);
+    if (classFilter) params.set('kelas', classFilter);
+    if (teacherIdFilter) params.set('teacherId', teacherIdFilter);
+    const qs = params.toString();
+    const res = await apiFetch(`/api/jadwal${qs ? `?${qs}` : ''}`);
+    if (res.ok && Array.isArray(res.data)) return res.data;
+  } catch (e) {
+    console.error('Failed to get schedule:', e);
   }
-  return [...scheduleList];
+  return [];
 }
 
 export async function addSchedule(data) {
-  await simulateNetwork();
-  const guru = teachersList.find(g => g.id === data.teacherId);
-  const mapel = subjectsList.find(m => m.id === data.subjectId);
-  const newSchedule = {
-    id: generateId(),
-    ...data,
-    teacher: guru?.name || '-',
-    subject: mapel?.nama || data.subject || '-',
-  };
-  scheduleList.push(newSchedule);
-  return { success: true, data: newSchedule, message: 'Jadwal berhasil ditambahkan.' };
+  try {
+    const res = await apiFetch('/api/jadwal', { method: 'POST', body: data });
+    return formatMutationResponse(res, 'Gagal menambahkan jadwal.');
+  } catch {
+    return { success: false, error: 'Gagal menghubungi server.' };
+  }
 }
 
 export async function deleteSchedule(id) {
-  await simulateNetwork();
-  scheduleList = scheduleList.filter(s => s.id !== id);
-  return { success: true, message: 'Jadwal berhasil dihapus.' };
+  try {
+    const res = await apiFetch(`/api/jadwal/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    return formatMutationResponse(res, 'Gagal menghapus jadwal.');
+  } catch {
+    return { success: false, error: 'Gagal menghubungi server.' };
+  }
 }
 
 export async function saveScheduleMatrix(day, records) {
-  await simulateNetwork();
-  // hapus jadwal lama untuk hari dan kelas yang ada di records (untuk overwrite)
-  // Atau lebih aman: hapus semua jadwal di hari 'day' yang kelasnya ada dalam records yang kita simpan
-  const classesToUpdate = [...new Set(records.map(r => r.class))];
-  
-  scheduleList = scheduleList.filter(s => !(s.day === day && classesToUpdate.includes(s.class)));
-  
-  // Masukkan jadwal baru
-  records.forEach(r => {
-    if (r.subjectId && r.teacherId) {
-      const guru = teachersList.find(g => g.id === r.teacherId);
-      const mapel = subjectsList.find(m => m.id === r.subjectId);
-      scheduleList.push({
-        id: generateId(),
-        day: day,
-        jamKe: r.jamKe,
-        class: r.class,
-        subjectId: r.subjectId,
-        subject: mapel?.nama || '-',
-        teacherId: r.teacherId,
-        teacher: guru?.name || '-',
-        room: r.room || '-',
-      });
-    }
-  });
-
-  return { success: true, message: 'Jadwal berhasil disimpan.' };
+  try {
+    const res = await apiFetch('/api/jadwal/matrix', { method: 'POST', body: { day, records } });
+    return formatMutationResponse(res, 'Gagal menyimpan matriks jadwal.');
+  } catch {
+    return { success: false, error: 'Gagal menghubungi server.' };
+  }
 }
 
+export async function getMasterTimeSlots() {
+  try {
+    const res = await apiFetch('/api/master-sesi');
+    if (res.ok && Array.isArray(res.data)) return res.data;
+  } catch (e) {
+    console.error('Failed to get master time slots:', e);
+  }
+  return [];
+}
+
+export async function updateMasterTimeSlot(slots) {
+  try {
+    const res = await apiFetch('/api/master-sesi', { method: 'PUT', body: { slots } });
+    return formatMutationResponse(res, 'Gagal menyimpan Master Sesi Waktu.');
+  } catch {
+    return { success: false, error: 'Gagal menghubungi server.' };
+  }
+}
+
+export async function getAcademicCalendar() {
+  try {
+    const res = await apiFetch('/api/kalender');
+    if (res.ok && Array.isArray(res.data)) return res.data;
+  } catch (e) {
+    console.error('Failed to get academic calendar:', e);
+  }
+  return [];
+}
+
+export async function getAcademicCalendarByDate(dateStr) {
+  try {
+    const res = await apiFetch(`/api/kalender?date=${encodeURIComponent(dateStr)}`);
+    if (res.ok && Array.isArray(res.data)) {
+      return res.data[0] || null;
+    }
+  } catch (e) {
+    console.error('Failed to get calendar by date:', e);
+  }
+  return null;
+}
+
+export async function addAcademicCalendarEvent(data) {
+  try {
+    const res = await apiFetch('/api/kalender', { method: 'POST', body: data });
+    return formatMutationResponse(res, 'Gagal menambahkan agenda kalender.');
+  } catch {
+    return { success: false, error: 'Gagal menghubungi server.' };
+  }
+}
+
+export async function deleteAcademicCalendarEvent(id) {
+  try {
+    const res = await apiFetch(`/api/kalender/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    return formatMutationResponse(res, 'Gagal menghapus agenda kalender.');
+  } catch {
+    return { success: false, error: 'Gagal menghubungi server.' };
+  }
+}
 
 /* ============================================================
-   ATTENDANCE (Siswa - Pagi & Sore)
+   ABSENSI SISWA (Piket Pagi/Sore, Mapel, Monitoring CCTV)
    ============================================================ */
 export async function getAttendance(classFilter, dateFilter, monthFilter) {
-  await simulateNetwork();
-  let data = [...attendanceList];
-  if (classFilter) data = data.filter(a => a.class === classFilter);
-  if (dateFilter) data = data.filter(a => a.date === dateFilter);
-  if (monthFilter) data = data.filter(a => a.date.startsWith(monthFilter)); // monthFilter is YYYY-MM
-  return data;
+  try {
+    const params = new URLSearchParams();
+    if (classFilter) params.set('kelas', classFilter);
+    if (dateFilter) params.set('date', dateFilter);
+    if (monthFilter) params.set('month', monthFilter);
+    const qs = params.toString();
+    const res = await apiFetch(`/api/absensi${qs ? `?${qs}` : ''}`);
+    if (res.ok && Array.isArray(res.data)) return res.data;
+  } catch (e) {
+    console.error('Failed to get attendance:', e);
+  }
+  return [];
 }
 
 export async function saveAttendance(records) {
-  await simulateNetwork();
-  records.forEach(record => {
-    const existingIndex = attendanceList.findIndex(
-      a => a.studentId === record.studentId && a.date === record.date
-    );
-    if (existingIndex !== -1) {
-      attendanceList[existingIndex] = { ...attendanceList[existingIndex], ...record };
-    } else {
-      attendanceList.push({ id: generateId(), ...record });
-    }
-  });
-  return { success: true, message: 'Absensi berhasil disimpan.' };
+  try {
+    const res = await apiFetch('/api/absensi', { method: 'POST', body: { records } });
+    return formatMutationResponse(res, 'Gagal menyimpan absensi piket.');
+  } catch {
+    return { success: false, error: 'Gagal menghubungi server.' };
+  }
 }
 
 export async function getSubjectAttendance(classFilter, dateFilter, subjectFilter, monthFilter) {
@@ -1028,255 +710,237 @@ export async function getSubjectAttendance(classFilter, dateFilter, subjectFilte
     if (dateFilter) params.set('date', dateFilter);
     if (subjectFilter) params.set('mapel', subjectFilter);
     if (monthFilter) params.set('month', monthFilter);
-    const res = await fetch(`/api/absensi-mapel?${params.toString()}`);
-    if (res.ok) return await res.json();
-  } catch (e) { console.error('Failed to get subject attendance', e); }
-  // Fallback ke mock
-  await simulateNetwork();
-  let data = [...subjectAttendanceList];
-  if (classFilter) data = data.filter(a => a.class === classFilter);
-  if (dateFilter) data = data.filter(a => a.date === dateFilter);
-  if (subjectFilter) data = data.filter(a => a.subject === subjectFilter);
-  if (monthFilter) data = data.filter(a => a.date.startsWith(monthFilter));
-  return data;
+    const qs = params.toString();
+    const res = await apiFetch(`/api/absensi-mapel${qs ? `?${qs}` : ''}`);
+    if (res.ok && Array.isArray(res.data)) return res.data;
+  } catch (e) {
+    console.error('Failed to get subject attendance:', e);
+  }
+  return [];
 }
 
 export async function saveSubjectAttendance(records) {
   try {
-    const res = await fetch('/api/absensi-mapel', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ records })
-    });
-    if (res.ok) return await res.json();
-  } catch (e) { console.error('Failed to save subject attendance', e); }
-  return { success: false, error: 'Gagal menghubungi server' };
+    const res = await apiFetch('/api/absensi-mapel', { method: 'POST', body: { records } });
+    return formatMutationResponse(res, 'Gagal menyimpan absensi mapel.');
+  } catch {
+    return { success: false, error: 'Gagal menghubungi server.' };
+  }
 }
 
 export async function getSubjectAttendanceRekap(kelas, month, mapelId) {
   try {
     const params = new URLSearchParams({ kelas, month });
     if (mapelId) params.set('mapel', mapelId);
-    const res = await fetch(`/api/absensi-mapel/rekap?${params.toString()}`);
-    if (res.ok) return await res.json();
-  } catch (e) { console.error('Failed to get subject attendance rekap', e); }
-  return { success: false, error: 'Gagal menghubungi server' };
+    const res = await apiFetch(`/api/absensi-mapel/rekap?${params.toString()}`);
+    if (res.ok && res.data) return res.data;
+  } catch (e) {
+    console.error('Failed to get subject attendance rekap:', e);
+  }
+  return { success: false, error: 'Gagal menghubungi server.' };
+}
+
+export async function getMonitoringClasses({ day, jamKe, date } = {}) {
+  try {
+    const params = new URLSearchParams();
+    if (day) params.set('day', day);
+    if (jamKe) params.set('jamKe', String(jamKe));
+    if (date) params.set('date', date);
+    const qs = params.toString();
+    const res = await apiFetch(`/api/monitoring/kelas${qs ? `?${qs}` : ''}`);
+    if (res.ok && res.data) return res.data;
+  } catch (e) {
+    console.error('Failed to get monitoring classes:', e);
+  }
+  return { date: date || getJakartaToday(), day: day || 'Senin', jamKe: Number(jamKe) || 1, items: [] };
 }
 
 export async function getPrayerAttendance(classFilter) {
-  await simulateNetwork();
   let data = [...MOCK_PRAYER_ATTENDANCE];
   if (classFilter) data = data.filter(a => a.class === classFilter);
   return data;
 }
 
-
 /* ============================================================
-   BEHAVIOR RULES (Aturan Poin — Editable Admin)
+   ATURAN POIN & POIN SIKAP SISWA
    ============================================================ */
 export async function getBehaviorRules() {
-  await simulateNetwork();
-  return [...behaviorRulesList];
+  try {
+    const res = await apiFetch('/api/aturan-poin');
+    if (res.ok && Array.isArray(res.data)) return res.data;
+  } catch (e) {
+    console.error('Failed to get behavior rules:', e);
+  }
+  return [];
 }
 
 export async function addBehaviorRule(data) {
-  await simulateNetwork();
-  const newRule = { id: generateId(), ...data };
-  behaviorRulesList.push(newRule);
-  return { success: true, data: newRule, message: 'Aturan poin berhasil ditambahkan.' };
+  try {
+    const res = await apiFetch('/api/aturan-poin', { method: 'POST', body: data });
+    return formatMutationResponse(res, 'Gagal menambahkan aturan poin.');
+  } catch {
+    return { success: false, error: 'Gagal menghubungi server.' };
+  }
 }
 
 export async function updateBehaviorRule(id, data) {
-  await simulateNetwork();
-  const index = behaviorRulesList.findIndex(r => r.id === id);
-  if (index !== -1) {
-    behaviorRulesList[index] = { ...behaviorRulesList[index], ...data };
-    return { success: true, message: 'Aturan poin berhasil diperbarui.' };
+  try {
+    const res = await apiFetch(`/api/aturan-poin/${encodeURIComponent(id)}`, { method: 'PUT', body: data });
+    return formatMutationResponse(res, 'Gagal memperbarui aturan poin.');
+  } catch {
+    return { success: false, error: 'Gagal menghubungi server.' };
   }
-  return { success: false, error: 'Aturan tidak ditemukan.' };
 }
 
 export async function deleteBehaviorRule(id) {
-  await simulateNetwork();
-  behaviorRulesList = behaviorRulesList.filter(r => r.id !== id);
-  return { success: true, message: 'Aturan poin berhasil dihapus.' };
+  try {
+    const res = await apiFetch(`/api/aturan-poin/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    return formatMutationResponse(res, 'Gagal menghapus aturan poin.');
+  } catch {
+    return { success: false, error: 'Gagal menghubungi server.' };
+  }
 }
 
-
-/* ============================================================
-   BEHAVIOR POINTS (Catatan Poin Siswa)
-   ============================================================ */
 export async function getBehaviorPoints(siswaIdFilter) {
-  await simulateNetwork();
-  let data = [...behaviorPointsList];
-  if (siswaIdFilter) data = data.filter(p => p.siswaId === siswaIdFilter);
-  return data;
+  try {
+    const url = siswaIdFilter ? `/api/poin-sikap?siswaId=${encodeURIComponent(siswaIdFilter)}` : '/api/poin-sikap';
+    const res = await apiFetch(url);
+    if (res.ok && Array.isArray(res.data)) return res.data;
+  } catch (e) {
+    console.error('Failed to get behavior points:', e);
+  }
+  return [];
 }
 
 export async function addBehaviorPoint(data) {
-  await simulateNetwork();
-  const siswa = studentsList.find(s => s.id === data.siswaId);
-  const aturan = behaviorRulesList.find(r => r.id === data.aturanPoinId);
-  const newPoint = {
-    id: generateId(),
-    siswaId: data.siswaId,
-    siswaName: siswa?.name || '-',
-    class: siswa?.class || '-',
-    tanggal: data.tanggal,
-    aturanPoinId: data.aturanPoinId,
-    aturanNama: aturan?.nama || '-',
-    poin: aturan?.poin || data.poin || 0,
-    keterangan: data.keterangan || '',
-    pencatat: data.pencatat || 'Admin',
-  };
-  behaviorPointsList.unshift(newPoint);
-  return { success: true, data: newPoint, message: 'Poin sikap berhasil dicatat.' };
+  try {
+    const res = await apiFetch('/api/poin-sikap', { method: 'POST', body: data });
+    return formatMutationResponse(res, 'Gagal mencatat poin sikap.');
+  } catch {
+    return { success: false, error: 'Gagal menghubungi server.' };
+  }
 }
 
 export async function deleteBehaviorPoint(id) {
-  await simulateNetwork();
-  behaviorPointsList = behaviorPointsList.filter(p => p.id !== id);
-  return { success: true, message: 'Catatan poin berhasil dihapus.' };
+  try {
+    const res = await apiFetch(`/api/poin-sikap/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    return formatMutationResponse(res, 'Gagal menghapus catatan poin.');
+  } catch {
+    return { success: false, error: 'Gagal menghubungi server.' };
+  }
 }
 
-/* Hitung total poin per siswa */
 export async function getStudentBehaviorSummary(siswaId) {
-  await simulateNetwork();
-  const points = behaviorPointsList.filter(p => p.siswaId === siswaId);
+  const points = await getBehaviorPoints(siswaId);
   const totalPositif = points.filter(p => p.poin > 0).reduce((sum, p) => sum + p.poin, 0);
   const totalNegatif = points.filter(p => p.poin < 0).reduce((sum, p) => sum + p.poin, 0);
   return { totalPositif, totalNegatif, totalPoin: totalPositif + totalNegatif, jumlahCatatan: points.length };
 }
 
-
 /* ============================================================
-   PAYMENTS
+   PAYMENTS (Legacy)
    ============================================================ */
 export async function getPayments(studentIdFilter) {
-  await simulateNetwork();
   if (studentIdFilter) {
     return MOCK_PAYMENTS.filter(p => p.studentId === studentIdFilter);
   }
   return [...MOCK_PAYMENTS];
 }
 
-
 /* ============================================================
-   GRADES
+   NILAI SISWA (FULL CRUD)
    ============================================================ */
-export async function getGrades(studentIdFilter) {
-  await simulateNetwork();
-  let data = [...MOCK_GRADES];
-  if (studentIdFilter) data = data.filter(g => g.studentId === studentIdFilter);
-  return data;
+export async function getGrades(studentIdFilter, filters = {}) {
+  try {
+    const params = new URLSearchParams();
+    if (studentIdFilter) params.set('studentId', studentIdFilter);
+    if (filters.kelas) params.set('kelas', filters.kelas);
+    if (filters.subject) params.set('subject', filters.subject);
+    if (filters.type) params.set('type', filters.type);
+    const qs = params.toString();
+    const res = await apiFetch(`/api/nilai${qs ? `?${qs}` : ''}`);
+    if (res.ok && Array.isArray(res.data)) return res.data;
+  } catch (e) {
+    console.error('Failed to get grades:', e);
+  }
+  return [];
 }
 
+export async function addGrade(data) {
+  try {
+    const res = await apiFetch('/api/nilai', { method: 'POST', body: data });
+    return formatMutationResponse(res, 'Gagal menyimpan nilai.');
+  } catch {
+    return { success: false, error: 'Gagal menghubungi server.' };
+  }
+}
+
+export async function updateGrade(id, data) {
+  try {
+    const res = await apiFetch(`/api/nilai/${encodeURIComponent(id)}`, { method: 'PUT', body: data });
+    return formatMutationResponse(res, 'Gagal memperbarui nilai.');
+  } catch {
+    return { success: false, error: 'Gagal menghubungi server.' };
+  }
+}
+
+export async function deleteGrade(id) {
+  try {
+    const res = await apiFetch(`/api/nilai/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    return formatMutationResponse(res, 'Gagal menghapus nilai.');
+  } catch {
+    return { success: false, error: 'Gagal menghubungi server.' };
+  }
+}
 
 /* ============================================================
-   DASHBOARD STATS
+   DASHBOARD STATS (SERVER-AGGREGATED)
    ============================================================ */
 export async function getDashboardStats() {
-  await simulateNetwork();
-
-  /* Hitung hari ini */
-  const days = ['Minggu', 'Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu'];
-  const today = days[new Date().getDay()];
-  const todaySchedule = scheduleList.filter(s => s.day === today);
-
-  /* Kehadiran guru hari ini */
-  const guruHadir = teacherAttendanceList.filter(a => a.status === 'hadir').length;
-  const guruIzin = teacherAttendanceList.filter(a => a.status === 'izin').length;
-  const guruSakit = teacherAttendanceList.filter(a => a.status === 'sakit').length;
-  const guruAlpha = teachersList.length - guruHadir - guruIzin - guruSakit;
-
-  /* Kehadiran siswa hari ini (pagi) */
-  const siswaHadir = attendanceList.filter(a => a.statusPagi === 'hadir').length;
-  const siswaIzin = attendanceList.filter(a => a.statusPagi === 'izin').length;
-  const siswaSakit = attendanceList.filter(a => a.statusPagi === 'sakit').length;
-  const siswaAlpha = attendanceList.filter(a => a.statusPagi === 'alpha').length;
-
-  /* Siswa bolos (hadir pagi tapi alpha sore) */
-  const siswaBolos = attendanceList.filter(a => a.statusPagi === 'hadir' && a.statusSore === 'alpha').length;
-
-  /* Upcoming events */
-  const upcomingEvents = MOCK_NEWS
-    .filter(n => n.category === 'Kegiatan' || n.category === 'Pengumuman')
-    .slice(0, 3);
-
-  /* Tahun ajar aktif */
-  const activeYear = academicYearsList.find(y => y.isActive);
-
-  /* Piket hari ini */
-  const todayDuty = dutyScheduleList.filter(d => d.hari === today);
-
+  try {
+    const res = await apiFetch('/api/dashboard/stats');
+    if (res.ok && res.data) {
+      return {
+        ...res.data,
+        todayDuty: dutyScheduleList.filter(d => d.hari === res.data.today),
+      };
+    }
+  } catch (e) {
+    console.error('Failed to get dashboard stats:', e);
+  }
   return {
-    totalStudents: studentsList.length,
-    totalTeachers: teachersList.length,
-    totalClasses: classesList.length,
-    todayScheduleCount: todaySchedule.length,
-    activeAcademicYear: activeYear ? `${activeYear.nama} Smt ${activeYear.semester}` : '-',
-    teacherAttendanceToday: { hadir: guruHadir, izin: guruIzin, sakit: guruSakit, alpha: guruAlpha > 0 ? guruAlpha : 0 },
-    studentAttendanceToday: { hadir: siswaHadir, izin: siswaIzin, sakit: siswaSakit, alpha: siswaAlpha, bolos: siswaBolos },
-    upcomingEvents,
-    todayDuty,
-    todaySchedule: todaySchedule.slice(0, 5),
+    totalStudents: 0,
+    totalTeachers: 0,
+    totalClasses: 0,
+    totalNews: 0,
+    totalPpdb: 0,
+    pendingPpdb: 0,
+    todayScheduleCount: 0,
+    activeAcademicYear: '-',
+    teacherAttendanceToday: { hadir: 0, izin: 0, sakit: 0, alpha: 0 },
+    studentAttendanceToday: { hadir: 0, izin: 0, sakit: 0, alpha: 0, bolos: 0 },
+    upcomingEvents: [],
+    todayDuty: [],
+    todaySchedule: [],
   };
-}
-
-/* ============================================================
-   PENJADWALAN DINAMIS (Master Sesi & Kalender Akademik)
-   ============================================================ */
-
-/* --- Master Sesi Waktu --- */
-export async function getMasterTimeSlots() {
-  await simulateNetwork();
-  return [...timeSlotsList];
-}
-
-export async function updateMasterTimeSlot(data) {
-  await simulateNetwork();
-  // Assume data is an array of new slots for simplicity
-  timeSlotsList = [...data];
-  return { success: true, message: 'Master Sesi Waktu berhasil diperbarui.' };
-}
-
-/* --- Kalender Akademik --- */
-export async function getAcademicCalendar() {
-  await simulateNetwork();
-  return [...academicCalendarList];
-}
-
-export async function getAcademicCalendarByDate(dateStr) {
-  await simulateNetwork();
-  return academicCalendarList.find(c => c.tanggal === dateStr) || null;
-}
-
-export async function addAcademicCalendarEvent(data) {
-  await simulateNetwork();
-  const newEvent = { id: generateId(), ...data };
-  academicCalendarList.push(newEvent);
-  return { success: true, data: newEvent, message: 'Event berhasil ditambahkan.' };
-}
-
-export async function deleteAcademicCalendarEvent(id) {
-  await simulateNetwork();
-  academicCalendarList = academicCalendarList.filter(c => c.id !== id);
-  return { success: true, message: 'Event berhasil dihapus.' };
 }
 
 /* ============================================================
    PROFIL SISWA (RAPOR KARAKTER & KEHADIRAN)
    ============================================================ */
 export async function getStudentProfile(studentId) {
-  await simulateNetwork();
-  
-  const student = studentsList.find(s => s.id === studentId);
+  const [students, piketRecords, mapelRecords, points] = await Promise.all([
+    getStudents(),
+    getAttendance(),
+    getSubjectAttendance(),
+    getBehaviorPoints(studentId),
+  ]);
+  const student = students.find(s => s.id === studentId);
   if (!student) return null;
 
-  // 1. Kehadiran Piket
-  const piketRecords = attendanceList.filter(a => a.studentId === studentId);
-  let piketSummary = { hadir: 0, izin: 0, sakit: 0, alpha: 0, total: 0 };
-  piketRecords.forEach(att => {
+  const studentPiket = piketRecords.filter(a => a.studentId === studentId);
+  const piketSummary = { hadir: 0, izin: 0, sakit: 0, alpha: 0, total: 0 };
+  studentPiket.forEach(att => {
     ['statusPagi', 'statusSore'].forEach(sesi => {
       if (att[sesi] === 'hadir') piketSummary.hadir++;
       else if (att[sesi] === 'izin') piketSummary.izin++;
@@ -1286,10 +950,9 @@ export async function getStudentProfile(studentId) {
   });
   piketSummary.total = piketSummary.hadir + piketSummary.izin + piketSummary.sakit + piketSummary.alpha;
 
-  // 2. Kehadiran Mapel
-  const mapelRecords = subjectAttendanceList.filter(a => a.studentId === studentId);
+  const studentMapel = mapelRecords.filter(a => a.studentId === studentId);
   const mapelSummary = {};
-  mapelRecords.forEach(att => {
+  studentMapel.forEach(att => {
     if (!mapelSummary[att.subject]) {
       mapelSummary[att.subject] = { hadir: 0, izin: 0, sakit: 0, alpha: 0, total: 0 };
     }
@@ -1300,150 +963,140 @@ export async function getStudentProfile(studentId) {
     mapelSummary[att.subject].total++;
   });
 
-  // 3. Jurnal Sikap
-  const attitudeRecords = studentAttitudeList.filter(a => a.studentId === studentId);
-  
+  const attitudeRecords = points.length > 0
+    ? points.map(p => ({
+        id: p.id,
+        studentId: p.siswaId,
+        date: p.tanggal,
+        category: p.poin >= 0 ? 'Prestasi' : 'Pelanggaran',
+        note: `${p.aturanNama}${p.keterangan ? ` — ${p.keterangan}` : ''}`,
+        points: p.poin,
+      }))
+    : studentAttitudeList.filter(a => a.studentId === studentId);
+
   return {
     student,
     piketSummary,
     mapelSummary,
-    attitudeRecords
+    attitudeRecords,
   };
 }
 
 /* ============================================================
-   BERITA & ARTIKEL PUBLIK
+   BERITA & ARTIKEL PUBLIK (FULL CRUD)
    ============================================================ */
-export async function getNews() {
-  await simulateNetwork();
+export async function getNews(includeDrafts = false) {
   try {
-    const res = await fetch('/api/berita');
-    const contentType = res.headers.get('content-type');
-    if (res.ok && contentType && contentType.includes('application/json')) {
-      const data = await res.json();
-      if (Array.isArray(data) && data.length > 0) {
-        newsList = data;
-        return [...newsList];
-      }
-    }
-  } catch (err) {
-    /* fallback to memory */
+    const url = includeDrafts ? '/api/berita?all=1' : '/api/berita';
+    const res = await apiFetch(url);
+    if (res.ok && Array.isArray(res.data)) return res.data;
+  } catch (e) {
+    console.error('Failed to get news:', e);
   }
-  return [...newsList];
+  return [];
 }
 
 export async function getNewsById(id) {
-  await simulateNetwork();
   try {
-    const res = await fetch(`/api/berita/${id}`);
-    const contentType = res.headers.get('content-type');
-    if (res.ok && contentType && contentType.includes('application/json')) {
-      const data = await res.json();
-      if (data && data.id) return data;
-    }
-  } catch (err) {
-    /* fallback to memory */
+    const res = await apiFetch(`/api/berita/${encodeURIComponent(id)}`);
+    if (res.ok && res.data && res.data.id) return res.data;
+  } catch (e) {
+    console.error('Failed to get news by id:', e);
   }
-  return newsList.find(n => n.id === id) || null;
+  return null;
 }
 
 export async function addNews(data) {
-  await simulateNetwork();
-  const newItem = {
-    id: generateId(),
-    title: (data.title || '').trim(),
-    excerpt: (data.excerpt || data.content?.slice(0, 140) || '').trim(),
-    content: (data.content || '').trim(),
-    category: data.category || 'Pengumuman',
-    author: data.author || 'Admin',
-    date: data.date || new Date().toISOString().split('T')[0],
-    image: data.image || null,
-  };
-  newsList.unshift(newItem);
-  return { success: true, data: newItem, message: 'Berita berhasil diterbitkan!' };
+  try {
+    const res = await apiFetch('/api/berita', { method: 'POST', body: data });
+    return formatMutationResponse(res, 'Gagal menerbitkan berita.');
+  } catch {
+    return { success: false, error: 'Gagal menghubungi server.' };
+  }
 }
 
 export async function updateNews(id, data) {
-  await simulateNetwork();
-  const index = newsList.findIndex(n => n.id === id);
-  if (index !== -1) {
-    newsList[index] = { ...newsList[index], ...data };
-    return { success: true, message: 'Berita berhasil diperbarui.' };
+  try {
+    const res = await apiFetch(`/api/berita/${encodeURIComponent(id)}`, { method: 'PUT', body: data });
+    return formatMutationResponse(res, 'Gagal memperbarui berita.');
+  } catch {
+    return { success: false, error: 'Gagal menghubungi server.' };
   }
-  return { success: false, error: 'Berita tidak ditemukan.' };
 }
 
 export async function deleteNews(id) {
-  await simulateNetwork();
-  newsList = newsList.filter(n => n.id !== id);
-  return { success: true, message: 'Berita berhasil dihapus.' };
+  try {
+    const res = await apiFetch(`/api/berita/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    return formatMutationResponse(res, 'Gagal menghapus berita.');
+  } catch {
+    return { success: false, error: 'Gagal menghubungi server.' };
+  }
 }
 
 /* ============================================================
-   PENDAFTARAN ONLINE (PPDB) DENGAN INTEGRASI GOOGLE SHEET & EMAIL
+   PENDAFTARAN ONLINE (PPDB) + VERIFIKASI ADMIN
    ============================================================ */
 export async function submitPPDB(data) {
-  await simulateNetwork();
-  const now = new Date();
-  const regNumber = `PPDB-${now.getFullYear()}-${String(Math.floor(1000 + Math.random() * 9000))}`;
-  
-  const registrationRecord = {
-    id: generateId(),
-    regNumber,
-    timestamp: now.toISOString(),
-    name: (data.name || '').trim(),
-    nisn: (data.nisn || '').trim(),
-    gender: data.gender || 'L',
-    schoolOrigin: (data.schoolOrigin || '').trim(),
-    majorChoice: data.majorChoice || 'TKJ',
-    phoneStudent: (data.phoneStudent || '').trim(),
-    phoneParent: (data.phoneParent || '').trim(),
-    email: (data.email || '').trim(),
-    address: (data.address || '').trim(),
-    track: data.track || 'Reguler',
-    status: 'Menunggu Verifikasi',
-  };
-
-  ppdbList.unshift(registrationRecord);
-
-  // Simpan juga ke localStorage agar tidak hilang di browser
   try {
-    const existing = JSON.parse(localStorage.getItem('sia_ppdb_submissions') || '[]');
-    existing.unshift(registrationRecord);
-    localStorage.setItem('sia_ppdb_submissions', JSON.stringify(existing));
-  } catch (e) {
-    console.warn('LocalStorage PPDB error:', e);
-  }
-
-  // Jika sekolah sudah memasang Webhook Google Apps Script di Pengaturan, kirim langsung
-  const webhookUrl = localStorage.getItem('sia_ppdb_google_webhook_url');
-  if (webhookUrl) {
-    try {
-      fetch(webhookUrl, {
-        method: 'POST',
-        mode: 'no-cors',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(registrationRecord),
-      }).catch(err => console.warn('Webhook Google Sheets PPDB warning:', err));
-    } catch (e) {
-      console.warn('Failed to call Google Apps Script webhook:', e);
+    const res = await apiFetch('/api/ppdb', {
+      method: 'POST',
+      skipAuthExpiry: true,
+      body: data,
+    });
+    const formatted = formatMutationResponse(res, 'Gagal mengirim formulir pendaftaran.');
+    if (formatted.success && formatted.data) {
+      // Tetap dukung webhook Google Sheets opsional jika dikonfigurasi sekolah
+      try {
+        const webhookUrl = localStorage.getItem('sia_ppdb_google_webhook_url');
+        if (webhookUrl && /^https:\/\//i.test(webhookUrl.trim())) {
+          fetch(webhookUrl.trim(), {
+            method: 'POST',
+            mode: 'no-cors',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(formatted.data),
+          }).catch(err => console.warn('Webhook Google Sheets PPDB warning:', err));
+        }
+      } catch {
+        /* Abaikan error storage/webhook */
+      }
     }
+    return formatted;
+  } catch {
+    return { success: false, error: 'Gagal menghubungi server pendaftaran.' };
   }
-
-  return {
-    success: true,
-    data: registrationRecord,
-    message: 'Pendaftaran Anda berhasil dikirim! Silakan simpan nomor pendaftaran Anda.',
-  };
 }
 
-export async function getPPDBList() {
-  await simulateNetwork();
+export async function getPPDBList(filters = {}) {
   try {
-    const fromStorage = JSON.parse(localStorage.getItem('sia_ppdb_submissions') || '[]');
-    if (fromStorage.length > ppdbList.length) {
-      ppdbList = fromStorage;
-    }
-  } catch (e) {}
-  return [...ppdbList];
+    const params = new URLSearchParams();
+    if (filters.status) params.set('status', filters.status);
+    if (filters.major) params.set('major', filters.major);
+    const qs = params.toString();
+    const res = await apiFetch(`/api/ppdb${qs ? `?${qs}` : ''}`);
+    if (res.ok && Array.isArray(res.data)) return res.data;
+  } catch (e) {
+    console.error('Failed to get PPDB list:', e);
+  }
+  return [];
+}
+
+export async function updatePPDBStatus(id, { status, notes }) {
+  try {
+    const res = await apiFetch(`/api/ppdb/${encodeURIComponent(id)}`, {
+      method: 'PUT',
+      body: { status, notes },
+    });
+    return formatMutationResponse(res, 'Gagal memperbarui status pendaftaran.');
+  } catch {
+    return { success: false, error: 'Gagal menghubungi server.' };
+  }
+}
+
+export async function deletePPDB(id) {
+  try {
+    const res = await apiFetch(`/api/ppdb/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    return formatMutationResponse(res, 'Gagal menghapus data pendaftaran.');
+  } catch {
+    return { success: false, error: 'Gagal menghubungi server.' };
+  }
 }

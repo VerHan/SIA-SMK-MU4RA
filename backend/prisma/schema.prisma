@@ -335,3 +335,49 @@ model AbsensiMapel {
 
   @@unique([studentId, mapelId, date, jamKe])
 }
+
+model MasterSesi {
+  id        String   @id @default(uuid())
+  order     Int      @default(0)
+  jamKe     Int?
+  type      String   @default("pelajaran") // pelajaran | istirahat
+  start     String   // HH:mm
+  end       String   // HH:mm
+  name      String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Berita {
+  id          String   @id @default(uuid())
+  title       String
+  excerpt     String
+  content     String
+  category    String   @default("Pengumuman")
+  author      String   @default("Admin")
+  date        DateTime @db.Date
+  image       String?
+  isPublished Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model PpdbRegistration {
+  id           String   @id @default(uuid())
+  regNumber    String   @unique
+  name         String
+  nisn         String?
+  gender       String   @default("L")
+  schoolOrigin String
+  majorChoice  String
+  phoneStudent String
+  phoneParent  String
+  email        String?
+  address      String
+  track        String   @default("Reguler")
+  status       String   @default("Menunggu Verifikasi") // Menunggu Verifikasi | Diterima | Cadangan | Ditolak
+  notes        String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+

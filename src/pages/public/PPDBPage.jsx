@@ -19,7 +19,7 @@ export default function PPDBPage() {
     nisn: '',
     gender: 'L',
     schoolOrigin: '',
-    majorChoice: 'TKJ',
+    majorChoice: JURUSAN_LIST[0]?.shortName || 'TKR',
     phoneStudent: '',
     phoneParent: '',
     email: '',
@@ -203,7 +203,7 @@ export default function PPDBPage() {
                 <Button onClick={() => window.print()} style={{ background: '#166534' }}>
                   🖨️ Cetak / Simpan Bukti
                 </Button>
-                <Button variant="outline" onClick={() => { setResult(null); setFormData({ name: '', nisn: '', gender: 'L', schoolOrigin: '', majorChoice: 'TKJ', phoneStudent: '', phoneParent: '', email: '', address: '', track: 'Reguler' }); }}>
+                <Button variant="outline" onClick={() => { setResult(null); setFormData({ name: '', nisn: '', gender: 'L', schoolOrigin: '', majorChoice: JURUSAN_LIST[0]?.shortName || 'TKR', phoneStudent: '', phoneParent: '', email: '', address: '', track: 'Reguler' }); }}>
                   Daftarkan Siswa Lain
                 </Button>
                 <Button variant="ghost" onClick={() => navigate('/')}>

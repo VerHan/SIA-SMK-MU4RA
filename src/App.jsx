@@ -46,6 +46,7 @@ import DashboardLayout from './components/layout/DashboardLayout';
 import MobileLayout from './components/mobile/MobileLayout';
 import PublicLayout from './components/layout/PublicLayout';
 import ProtectedRoute from './components/shared/ProtectedRoute';
+import RoleGuard from './components/shared/RoleGuard';
 
 /* ── Public Website Pages (Lazy Loading) ── */
 const HomePage = safeLazy(() => import('./pages/public/HomePage'));
@@ -56,7 +57,7 @@ const BeritaDetailPage = safeLazy(() => import('./pages/public/BeritaDetailPage'
 const PPDBPage = safeLazy(() => import('./pages/public/PPDBPage'));
 
 /* ── SIA Admin Pages (Lazy Loading dengan Safe Retry) ── */
-const LoginPage = safeLazy(() => import('./pages/public/LoginPage'));
+import LoginPage from './pages/public/LoginPage';
 const DashboardPage = safeLazy(() => import('./pages/dashboard/DashboardPage'));
 const AbsenGuruGPSPage = safeLazy(() => import('./pages/dashboard/AbsenGuruGPSPage'));
 const DataSiswaPage = safeLazy(() => import('./pages/dashboard/DataSiswaPage'));
@@ -78,6 +79,9 @@ const GuruAbsenPiketPage = safeLazy(() => import('./pages/dashboard/GuruAbsenPik
 const GuruAbsenMapelPage = safeLazy(() => import('./pages/dashboard/GuruAbsenMapelPage'));
 const KalenderAkademikPage = safeLazy(() => import('./pages/dashboard/KalenderAkademikPage'));
 const ManajemenJadwalPage = safeLazy(() => import('./pages/dashboard/ManajemenJadwalPage'));
+const ManajemenAkunPage = safeLazy(() => import('./pages/dashboard/ManajemenAkunPage'));
+const ManajemenBeritaPage = safeLazy(() => import('./pages/dashboard/ManajemenBeritaPage'));
+const ManajemenPPDBPage = safeLazy(() => import('./pages/dashboard/ManajemenPPDBPage'));
 
 /* ── Mobile Client Pages (Lazy Loading dengan Safe Retry) ── */
 const MobileHomePage = safeLazy(() => import('./pages/mobile/MobileHomePage'));
@@ -193,8 +197,13 @@ export default function App() {
                   <Route path="/dashboard/guru-absen-piket" element={<GuruAbsenPiketPage />} />
                   <Route path="/dashboard/guru-absen-mapel" element={<GuruAbsenMapelPage />} />
                   
+                  {/* Publikasi & PPDB */}
+                  <Route path="/dashboard/berita" element={<RoleGuard allowedRoles={['admin', 'staff']}><ManajemenBeritaPage /></RoleGuard>} />
+                  <Route path="/dashboard/ppdb" element={<RoleGuard allowedRoles={['admin', 'staff']}><ManajemenPPDBPage /></RoleGuard>} />
+
                   {/* Sistem */}
-                  <Route path="/dashboard/pengaturan" element={<PengaturanPage />} />
+                  <Route path="/dashboard/akun" element={<RoleGuard allowedRoles={['admin']}><ManajemenAkunPage /></RoleGuard>} />
+                  <Route path="/dashboard/pengaturan" element={<RoleGuard allowedRoles={['admin']}><PengaturanPage /></RoleGuard>} />
                   
                   {/* Legacy routes (hidden from menu, still accessible) */}
 

@@ -2,13 +2,36 @@ import express from 'express';
 import cors from 'cors';
 import { PrismaClient } from '@prisma/client';
 import dotenv from 'dotenv';
+import { createMockApiRouter } from './mockStore.js';
+import { createExtraPrismaRoutes } from './extraPrismaRoutes.js';
+import {
+  attachAuth,
+  createCorsOptions,
+  hashPassword,
+  requireAuth,
+  requireRole,
+  signToken,
+  verifyPassword,
+} from './authUtils.js';
 dotenv.config();
 
 const app = express();
-const prisma = new PrismaClient();
-const PORT = process.env.PORT || 5000;
+const PORT = process.env.PORT || 3000;
 
-app.use(cors());
+let prisma = null;
+if (process.env.DATABASE_URL) {
+  try {
+    prisma = new PrismaClient();
+  } catch (err) {
+    console.warn('[AI Studio] PrismaClient unavailable — using in-memory mock store:', err.message);
+    prisma = null;
+  }
+} else {
+  console.warn('[AI Studio] DATABASE_URL not set — using in-memory mock store for /api');
+}
+
+app.use(cors(createCorsOptions()));
+app.use(attachAuth);
 
 // Vercel Serverless-safe body parser (avoids 400 Bad Request when req.body is already parsed)
 app.use((req, res, next) => {
@@ -34,9 +57,16 @@ app.use((req, res, next) => {
   });
 });
 
+// When no external PostgreSQL database is configured, serve all /api/* routes from in-memory store
+if (!prisma) {
+  app.use('/api', createMockApiRouter());
+} else {
+  app.use('/api', createExtraPrismaRoutes(prisma));
+}
+
 // Endpoint untuk cek server jalan atau tidak
-app.get('/', (req, res) => {
-  res.send('Server SIA SMK MU4RA Berjalan!');
+app.get('/api/health', (req, res) => {
+  res.json({ ok: true, mode: prisma ? 'prisma' : 'memory', message: 'Server SIA SMK MU4RA Berjalan!' });
 });
 
 // Endpoint Anti-Sleep untuk Bot (cron-job.org)
@@ -185,7 +215,7 @@ app.get('/api/keep-alive/status', async (req, res) => {
 
 // --- API ROUTES ---
 
-// 1. Auth Login
+// 1. Auth Login (scrypt hashed password + seamless upgrade for legacy plaintext rows + signed JWT)
 app.post('/api/auth/login', async (req, res) => {
   try {
     const { username, password } = req.body || {};
@@ -194,18 +224,33 @@ app.post('/api/auth/login', async (req, res) => {
     }
 
     const user = await prisma.user.findUnique({ where: { username: username.trim() } });
-    if (!user || user.password !== password) {
+    if (!user) {
       return res.status(401).json({ success: false, error: 'Username atau password salah' });
     }
-    return res.json({
-      success: true,
-      user: {
-        id: user.id,
-        username: user.username,
-        name: user.name,
-        role: user.role
-      }
-    });
+
+    const { valid, needsRehash } = verifyPassword(password, user.password);
+    if (!valid) {
+      return res.status(401).json({ success: false, error: 'Username atau password salah' });
+    }
+
+    // Automatically upgrade legacy plaintext password to scrypt hash in DB
+    if (needsRehash) {
+      await prisma.user.update({
+        where: { id: user.id },
+        data: { password: hashPassword(password) },
+      }).catch(() => {});
+    }
+
+    const safeUser = {
+      id: user.id,
+      username: user.username,
+      name: user.name,
+      role: user.role,
+      teacherId: user.teacherId || null,
+      studentId: user.studentId || null,
+    };
+    const token = signToken(safeUser);
+    return res.json({ success: true, token, user: safeUser });
   } catch (err) {
     console.error('API /api/auth/login error:', err);
     return res.status(500).json({ success: false, error: err.message || 'Database error' });
@@ -259,7 +304,7 @@ app.get('/api/guru/absen', async (req, res) => {
 });
 
 // 3. Guru Absensi (POST GPS)
-app.post('/api/guru/absen', async (req, res) => {
+app.post('/api/guru/absen', requireAuth, async (req, res) => {
   const { teacherName, teacherId, guruId, type, distanceMeters, isWithinGeofence } = req.body;
   try {
     const targetGuruId = teacherId || guruId;
@@ -400,7 +445,7 @@ app.post('/api/guru/absen', async (req, res) => {
 });
 
 // 3b. Guru Absensi (POST Manual Admin)
-app.post('/api/guru/absen/manual', async (req, res) => {
+app.post('/api/guru/absen/manual', requireRole('admin', 'staff'), async (req, res) => {
   const { guruId, tanggal, status, jamMasuk, jamPulang, keterangan } = req.body;
   try {
     const guru = await prisma.guru.findUnique({ where: { id: guruId } });
@@ -457,7 +502,7 @@ app.get('/api/mapel/kelompok', async (req, res) => {
   }
 });
 
-app.post('/api/mapel/kelompok', async (req, res) => {
+app.post('/api/mapel/kelompok', requireRole('admin'), async (req, res) => {
   const { name } = req.body;
   try {
     const existing = await prisma.kelompokMapel.findUnique({ where: { nama: name } });
@@ -469,7 +514,7 @@ app.post('/api/mapel/kelompok', async (req, res) => {
   }
 });
 
-app.put('/api/mapel/kelompok/:oldName', async (req, res) => {
+app.put('/api/mapel/kelompok/:oldName', requireRole('admin'), async (req, res) => {
   const { oldName } = req.params;
   const { newName } = req.body;
   try {
@@ -499,7 +544,7 @@ app.put('/api/mapel/kelompok/:oldName', async (req, res) => {
   }
 });
 
-app.delete('/api/mapel/kelompok/:name', async (req, res) => {
+app.delete('/api/mapel/kelompok/:name', requireRole('admin'), async (req, res) => {
   const { name } = req.params;
   try {
     await prisma.kelompokMapel.delete({ where: { nama: name } });
@@ -519,26 +564,41 @@ app.get('/api/mapel', async (req, res) => {
   }
 });
 
-app.post('/api/mapel', async (req, res) => {
+app.post('/api/mapel', requireRole('admin'), async (req, res) => {
   try {
-    const newMapel = await prisma.mataPelajaran.create({ data: req.body });
+    const { kode, nama, kelompok } = req.body;
+    if (!kode || !nama) {
+      return res.status(400).json({ success: false, error: 'Kode dan nama mata pelajaran wajib diisi.' });
+    }
+    const newMapel = await prisma.mataPelajaran.create({
+      data: {
+        kode: String(kode).trim(),
+        nama: String(nama).trim(),
+        kelompok: kelompok ? String(kelompok).trim() : 'Umum',
+      }
+    });
     res.json({ success: true, data: newMapel, message: 'Mata pelajaran berhasil ditambahkan' });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
 });
 
-app.put('/api/mapel/:id', async (req, res) => {
+app.put('/api/mapel/:id', requireRole('admin'), async (req, res) => {
   const { id } = req.params;
   try {
-    await prisma.mataPelajaran.update({ where: { id }, data: req.body });
+    const { kode, nama, kelompok } = req.body;
+    const updateData = {};
+    if (kode !== undefined) updateData.kode = String(kode).trim();
+    if (nama !== undefined) updateData.nama = String(nama).trim();
+    if (kelompok !== undefined) updateData.kelompok = String(kelompok).trim();
+    await prisma.mataPelajaran.update({ where: { id }, data: updateData });
     res.json({ success: true, message: 'Mata pelajaran berhasil diperbarui' });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
 });
 
-app.delete('/api/mapel/:id', async (req, res) => {
+app.delete('/api/mapel/:id', requireRole('admin'), async (req, res) => {
   const { id } = req.params;
   try {
     await prisma.mataPelajaran.delete({ where: { id } });
@@ -569,7 +629,7 @@ app.get('/api/guru', async (req, res) => {
   }
 });
 
-app.post('/api/guru', async (req, res) => {
+app.post('/api/guru', requireRole('admin'), async (req, res) => {
   try {
     const { nip, name, subject, phone } = req.body;
     const guru = await prisma.guru.create({
@@ -581,7 +641,7 @@ app.post('/api/guru', async (req, res) => {
   }
 });
 
-app.put('/api/guru/:id', async (req, res) => {
+app.put('/api/guru/:id', requireRole('admin'), async (req, res) => {
   const { id } = req.params;
   try {
     const { nip, name, subject, phone } = req.body;
@@ -595,7 +655,7 @@ app.put('/api/guru/:id', async (req, res) => {
   }
 });
 
-app.delete('/api/guru/:id', async (req, res) => {
+app.delete('/api/guru/:id', requireRole('admin'), async (req, res) => {
   const { id } = req.params;
   try {
     await prisma.guru.delete({ where: { id } });
@@ -659,7 +719,7 @@ app.get('/api/siswa', async (req, res) => {
   }
 });
 
-app.post('/api/siswa', async (req, res) => {
+app.post('/api/siswa', requireRole('admin', 'staff'), async (req, res) => {
   try {
     const { nomor, nis, name, gender, phone, phone_parent, pekerjaan_ortu, alamat, sekolah_asal, class: kelasName } = req.body;
     if (!name || !name.trim()) {
@@ -698,7 +758,7 @@ app.post('/api/siswa', async (req, res) => {
   }
 });
 
-app.put('/api/siswa/:id', async (req, res) => {
+app.put('/api/siswa/:id', requireRole('admin', 'staff'), async (req, res) => {
   const { id } = req.params;
   try {
     const { nomor, nis, name, gender, phone, phone_parent, pekerjaan_ortu, alamat, sekolah_asal } = req.body;
@@ -725,7 +785,7 @@ app.put('/api/siswa/:id', async (req, res) => {
   }
 });
 
-app.delete('/api/siswa/:id', async (req, res) => {
+app.delete('/api/siswa/:id', requireRole('admin', 'staff'), async (req, res) => {
   const { id } = req.params;
   try {
     // Delete related records first
@@ -737,7 +797,7 @@ app.delete('/api/siswa/:id', async (req, res) => {
   }
 });
 
-app.post('/api/siswa/import', async (req, res) => {
+app.post('/api/siswa/import', requireRole('admin', 'staff'), async (req, res) => {
   try {
     const { data: dataArray } = req.body;
     if (!Array.isArray(dataArray) || dataArray.length === 0) {
@@ -814,7 +874,7 @@ app.get('/api/kelas', async (req, res) => {
   }
 });
 
-app.post('/api/kelas', async (req, res) => {
+app.post('/api/kelas', requireRole('admin'), async (req, res) => {
   try {
     const { name, grade, major, teacherId } = req.body;
     const trimmedName = (name || '').trim();
@@ -879,7 +939,7 @@ app.post('/api/kelas', async (req, res) => {
   }
 });
 
-app.put('/api/kelas/:id', async (req, res) => {
+app.put('/api/kelas/:id', requireRole('admin'), async (req, res) => {
   const { id } = req.params;
   try {
     const { name, grade, major, teacherId } = req.body;
@@ -939,7 +999,7 @@ app.put('/api/kelas/:id', async (req, res) => {
   }
 });
 
-app.delete('/api/kelas/:id', async (req, res) => {
+app.delete('/api/kelas/:id', requireRole('admin'), async (req, res) => {
   const { id } = req.params;
   try {
     await prisma.riwayatKelas.deleteMany({ where: { kelasId: id } });
@@ -977,7 +1037,7 @@ app.get('/api/jurusan', async (req, res) => {
   }
 });
 
-app.post('/api/jurusan', async (req, res) => {
+app.post('/api/jurusan', requireRole('admin'), async (req, res) => {
   try {
     const { kode, nama, deskripsi, color } = req.body;
     const cleanKode = (kode || '').trim().toUpperCase();
@@ -1004,7 +1064,7 @@ app.post('/api/jurusan', async (req, res) => {
   }
 });
 
-app.put('/api/jurusan/:id', async (req, res) => {
+app.put('/api/jurusan/:id', requireRole('admin'), async (req, res) => {
   const { id } = req.params;
   try {
     const { kode, nama, deskripsi, color } = req.body;
@@ -1045,7 +1105,7 @@ app.put('/api/jurusan/:id', async (req, res) => {
   }
 });
 
-app.delete('/api/jurusan/:id', async (req, res) => {
+app.delete('/api/jurusan/:id', requireRole('admin'), async (req, res) => {
   const { id } = req.params;
   try {
     const target = await prisma.jurusan.findUnique({ where: { id } });
@@ -1091,7 +1151,7 @@ app.get('/api/tahun-ajar', async (req, res) => {
   }
 });
 
-app.post('/api/tahun-ajar', async (req, res) => {
+app.post('/api/tahun-ajar', requireRole('admin'), async (req, res) => {
   try {
     const { nama, semester, startDate, endDate, isActive } = req.body;
     const shouldBeActive = Boolean(isActive);
@@ -1122,7 +1182,7 @@ app.post('/api/tahun-ajar', async (req, res) => {
   }
 });
 
-app.put('/api/tahun-ajar/:id', async (req, res) => {
+app.put('/api/tahun-ajar/:id', requireRole('admin'), async (req, res) => {
   const { id } = req.params;
   try {
     const { nama, semester, startDate, endDate, isActive } = req.body;
@@ -1157,7 +1217,7 @@ app.put('/api/tahun-ajar/:id', async (req, res) => {
   }
 });
 
-app.delete('/api/tahun-ajar/:id', async (req, res) => {
+app.delete('/api/tahun-ajar/:id', requireRole('admin'), async (req, res) => {
   const { id } = req.params;
   try {
     await prisma.tahunAjar.delete({ where: { id } });
@@ -1167,7 +1227,7 @@ app.delete('/api/tahun-ajar/:id', async (req, res) => {
   }
 });
 
-app.put('/api/tahun-ajar/:id/activate', async (req, res) => {
+app.put('/api/tahun-ajar/:id/activate', requireRole('admin'), async (req, res) => {
   const { id } = req.params;
   try {
     // Nonaktifkan semua dulu
@@ -1193,7 +1253,7 @@ app.put('/api/tahun-ajar/:id/activate', async (req, res) => {
 // ==========================================
 
 // POST — Guru menyimpan absensi murid per jam pelajaran
-app.post('/api/absensi-mapel', async (req, res) => {
+app.post('/api/absensi-mapel', requireRole('admin', 'guru'), async (req, res) => {
   try {
     const { records } = req.body;
     if (!Array.isArray(records) || records.length === 0) {
@@ -1246,7 +1306,12 @@ app.get('/api/absensi-mapel', async (req, res) => {
     const { kelas, mapel, date, month } = req.query;
     let where = {};
     if (kelas) where.kelasName = kelas;
-    if (mapel) where.mapelId = mapel;
+    if (mapel) {
+      where.OR = [
+        { mapelId: mapel },
+        { mapel: { nama: mapel } },
+      ];
+    }
     if (date) where.date = new Date(date);
     if (month) {
       const [y, m] = month.split('-');

@@ -18,7 +18,7 @@ export default function LoginPage() {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
-  const { login, isAuthenticated } = useAuth();
+  const { login, isAuthenticated, user } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
 
@@ -27,7 +27,8 @@ export default function LoginPage() {
 
   /* Jika sudah login, redirect sesuai role */
   if (isAuthenticated) {
-    return <Navigate to={customRedirect || '/'} replace />;
+    const defaultTarget = user?.role === 'admin' ? '/dashboard/ringkasan' : '/app/home';
+    return <Navigate to={customRedirect || defaultTarget} replace />;
   }
 
   const handleSubmit = async (e) => {
