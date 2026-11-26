@@ -16,9 +16,11 @@ import {
   formatJakartaTimeHHMM,
   getClientIp,
   hashPasswordAsync,
+  normalizeRole,
   requireAuth,
   requireRole,
   securityHeadersMiddleware,
+  setAuthNoStoreHeaders,
   setSessionCookie,
   signToken,
   validateGeofenceConfig,
@@ -28,6 +30,7 @@ import {
 dotenv.config();
 
 const app = express();
+app.set('trust proxy', 1);
 const PORT = process.env.PORT || 3000;
 
 // Singleton PrismaClient across warm serverless invocations & dev reloads
@@ -72,6 +75,10 @@ async function getActiveTahunAjar() {
 
 app.use(securityHeadersMiddleware);
 app.use(cors(createCorsOptions()));
+app.use('/api/auth', (req, res, next) => {
+  setAuthNoStoreHeaders(res);
+  next();
+});
 app.use(attachAuth);
 
 // Vercel Serverless-safe body parser (avoids 400 Bad Request when req.body is already parsed)
@@ -120,7 +127,15 @@ const ppdbRateLimiter = createRateLimiter({
   message: 'Terlalu banyak pengiriman formulir PPDB. Silakan coba lagi beberapa menit kemudian.',
 });
 
+const changePasswordRateLimiter = createRateLimiter({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  keyGenerator: (req) => `chpwd:${req.authUser?.id || getClientIp(req)}`,
+  message: 'Terlalu banyak percobaan ubah password. Silakan tunggu beberapa menit lalu coba lagi.',
+});
+
 app.post('/api/auth/login', loginIpRateLimiter, loginAccountRateLimiter);
+app.post('/api/auth/change-password', changePasswordRateLimiter);
 app.post('/api/ppdb', ppdbRateLimiter);
 
 // When no external PostgreSQL database is configured, serve all /api/* routes from in-memory store
@@ -295,7 +310,13 @@ app.post('/api/auth/login', async (req, res) => {
       return res.status(400).json({ success: false, error: 'Username dan password wajib diisi' });
     }
 
-    const user = await prisma.user.findUnique({ where: { username: username.trim() } });
+    const cleanUsername = String(username).trim();
+    let user = await prisma.user.findUnique({ where: { username: cleanUsername } });
+    if (!user) {
+      user = await prisma.user.findFirst({
+        where: { username: { equals: cleanUsername, mode: 'insensitive' } },
+      }).catch(() => null);
+    }
     if (!user) {
       return res.status(401).json({ success: false, error: 'Username atau password salah' });
     }
@@ -322,12 +343,13 @@ app.post('/api/auth/login', async (req, res) => {
         }).catch(() => [])
       : [];
 
-    const isPiket = user.role === 'guru' ? Boolean(user.isPiket) : false;
+    const normalizedRole = normalizeRole(user.role);
+    const isPiket = normalizedRole === 'guru' ? Boolean(user.isPiket) : false;
     const baseUser = {
       id: user.id,
       username: user.username,
       name: user.name,
-      role: user.role,
+      role: normalizedRole,
       isPiket,
       teacherId: user.teacherId || null,
       studentId: user.studentId || null,

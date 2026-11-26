@@ -3,19 +3,61 @@ import { promisify } from 'util';
 
 const scryptAsync = promisify(crypto.scrypt);
 
-// Session signing key: read from server env or fall back to an ephemeral in-memory random key
-if (process.env.NODE_ENV === 'production' && !process.env.JWT_SECRET) {
-  console.warn('[SIA Security] WARNING: JWT_SECRET belum diset di environment production. Set JWT_SECRET agar sesi guru tidak terputus antar-instance serverless.');
+// Lazy session signing key (evaluated on demand AFTER dotenv.config() has run):
+// 1. Primary: explicit server-side JWT_SECRET
+// 2. Serverless / preview stability fallback: deterministic HMAC derived from stable server env
+//    (DATABASE_URL / DIRECT_URL in production, or APPLET_ID / VERCEL_PROJECT_ID / K_SERVICE / APP_URL)
+//    so multi-instance deployments and container restarts share the exact same signing key.
+// 3. Local bare fallback (no env configured): process-scoped random 32-byte key.
+let cachedEphemeralSecret = null;
+let warnedSecretFallback = false;
+
+export function getSessionSecret() {
+  const explicit = (process.env.JWT_SECRET || '').trim();
+  if (explicit) {
+    return explicit;
+  }
+  const envSeed = (
+    process.env.DATABASE_URL ||
+    process.env.DIRECT_URL ||
+    process.env.APPLET_ID ||
+    process.env.VERCEL_PROJECT_ID ||
+    process.env.K_SERVICE ||
+    process.env.APP_URL ||
+    ''
+  ).trim();
+  if (envSeed) {
+    if (process.env.NODE_ENV === 'production' && !warnedSecretFallback) {
+      warnedSecretFallback = true;
+      console.warn('[SIA Security] Notice: JWT_SECRET belum diset; menggunakan kunci sesi deterministik dari server env. Disarankan tetap menambahkan JWT_SECRET terpisah.');
+    }
+    return crypto
+      .createHmac('sha256', 'sia-smk-mu4ra-session-key-v1')
+      .update(envSeed)
+      .digest('hex');
+  }
+  if (!cachedEphemeralSecret) {
+    if (process.env.NODE_ENV === 'production' && !warnedSecretFallback) {
+      warnedSecretFallback = true;
+      console.warn('[SIA Security] WARNING: JWT_SECRET dan DATABASE_URL belum diset; sesi hanya bertahan selama proses server hidup.');
+    }
+    cachedEphemeralSecret = crypto.randomBytes(32).toString('hex');
+  }
+  return cachedEphemeralSecret;
 }
-const SESSION_SECRET = process.env.JWT_SECRET || crypto.randomBytes(32).toString('hex');
+
 export const SESSION_COOKIE_NAME = 'sia_session';
 const SHORT_TOKEN_TTL_SECONDS = 60 * 60 * 12; // 12 hours (non-persistent session)
 const REMEMBER_TOKEN_TTL_SECONDS = 60 * 60 * 24 * 30; // 30 days (PWA persistent session)
 
 const VALID_ROLES = new Set(['admin', 'guru', 'staff', 'kepsek', 'wali_murid']);
 
+export function normalizeRole(role) {
+  return typeof role === 'string' ? role.trim().toLowerCase() : '';
+}
+
 export function isValidRole(role) {
-  return typeof role === 'string' && VALID_ROLES.has(role);
+  return VALID_ROLES.has(normalizeRole(role));
 }
 
 /**
@@ -96,6 +138,36 @@ export async function verifyPasswordAsync(password, stored) {
   return { valid, needsRehash: valid };
 }
 
+const COMMON_WEAK_PASSWORDS = new Set([
+  'admin123',
+  'guru123',
+  'staff123',
+  'wali123',
+  '12345678',
+  '123456789',
+  'password',
+  'password123',
+  'qwerty123',
+  'smkmu4ra',
+]);
+
+/**
+ * Validate a newly chosen password against basic length and known breached demo defaults.
+ */
+export function validateNewPassword(newPassword, currentPassword = '') {
+  const clean = typeof newPassword === 'string' ? newPassword.trim() : '';
+  if (clean.length < 8) {
+    return { valid: false, error: 'Password baru minimal harus 8 karakter.' };
+  }
+  if (COMMON_WEAK_PASSWORDS.has(clean.toLowerCase())) {
+    return { valid: false, error: 'Password ini terlalu umum/tercatat bocor. Gunakan kombinasi unik (huruf besar, kecil, dan angka).' };
+  }
+  if (currentPassword && clean === String(currentPassword).trim()) {
+    return { valid: false, error: 'Password baru tidak boleh sama dengan password lama.' };
+  }
+  return { valid: true, value: clean };
+}
+
 function base64UrlEncode(input) {
   return Buffer.from(input)
     .toString('base64')
@@ -114,7 +186,7 @@ function base64UrlDecode(str) {
  * and homeroom classes derived from Kelas.teacherId.
  */
 export function buildUserCapabilities(user, homeroomClasses = []) {
-  const role = user?.role || '';
+  const role = normalizeRole(user?.role);
   const isAdmin = role === 'admin';
   const isStaff = role === 'staff';
   const isKepsek = role === 'kepsek';
@@ -217,12 +289,13 @@ export function signToken(user, { rememberMe = true } = {}) {
   const homeroomClasses = Array.isArray(user.homeroomClasses)
     ? user.homeroomClasses.map(c => ({ id: c.id, name: c.name }))
     : [];
-  const isPiket = user.role === 'guru' ? Boolean(user.isPiket) : false;
+  const role = normalizeRole(user.role);
+  const isPiket = role === 'guru' ? Boolean(user.isPiket) : false;
   const payload = base64UrlEncode(JSON.stringify({
     sub: user.id,
     username: user.username,
     name: user.name,
-    role: user.role,
+    role,
     isPiket,
     teacherId: user.teacherId || null,
     studentId: user.studentId || null,
@@ -232,7 +305,7 @@ export function signToken(user, { rememberMe = true } = {}) {
     exp: now + ttl,
   }));
   const signature = base64UrlEncode(
-    crypto.createHmac('sha256', SESSION_SECRET).update(`${header}.${payload}`).digest()
+    crypto.createHmac('sha256', getSessionSecret()).update(`${header}.${payload}`).digest()
   );
   return `${header}.${payload}.${signature}`;
 }
@@ -248,7 +321,7 @@ export function verifyToken(token) {
 
   try {
     const expectedSig = base64UrlEncode(
-      crypto.createHmac('sha256', SESSION_SECRET).update(`${header}.${payload}`).digest()
+      crypto.createHmac('sha256', getSessionSecret()).update(`${header}.${payload}`).digest()
     );
     const sigBuf = Buffer.from(sig);
     const expBuf = Buffer.from(expectedSig);
@@ -260,13 +333,14 @@ export function verifyToken(token) {
     const now = Math.floor(Date.now() / 1000);
     if (!decoded.exp || decoded.exp < now) return null;
 
+    const role = normalizeRole(decoded.role);
     const homeroomClasses = Array.isArray(decoded.homeroomClasses) ? decoded.homeroomClasses : [];
     const baseUser = {
       id: decoded.sub,
       username: decoded.username,
       name: decoded.name,
-      role: decoded.role,
-      isPiket: decoded.role === 'guru' ? Boolean(decoded.isPiket) : false,
+      role,
+      isPiket: role === 'guru' ? Boolean(decoded.isPiket) : false,
       teacherId: decoded.teacherId || null,
       studentId: decoded.studentId || null,
       homeroomClasses,
@@ -300,9 +374,24 @@ function parseCookies(cookieHeader) {
   return result;
 }
 
-function isHttpsRequest(req) {
-  const forwardedProto = String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim().toLowerCase();
-  return Boolean(req.secure || forwardedProto === 'https');
+export function isHttpsRequest(req) {
+  const headers = req?.headers || {};
+  const forwardedProto = String(headers['x-forwarded-proto'] || '').split(',')[0].trim().toLowerCase();
+  if (req?.secure || forwardedProto === 'https' || String(headers['x-forwarded-ssl'] || '').toLowerCase() === 'on') {
+    return true;
+  }
+  const origin = String(headers.origin || '').trim().toLowerCase();
+  const referer = String(headers.referer || '').trim().toLowerCase();
+  if (origin.startsWith('https://') || referer.startsWith('https://')) {
+    return true;
+  }
+  return false;
+}
+
+export function setAuthNoStoreHeaders(res) {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Vary', 'Cookie, Authorization');
 }
 
 /**
@@ -510,28 +599,44 @@ export function sanitizeSafeUrl(value) {
 
 /**
  * Restricted CORS helper (avoids wildcard '*' on authenticated APIs).
+ * Supports same-origin custom domains, local dev, Cloud Run, Vercel, and .sch.id hosts.
  */
 export function createCorsOptions() {
-  return {
-    origin(origin, callback) {
-      // Allow same-origin / server-to-server requests with no Origin header
-      if (!origin) return callback(null, true);
-      try {
-        const parsed = new URL(origin);
-        const host = parsed.hostname.toLowerCase();
-        const isAllowed =
-          host === 'localhost' ||
-          host === '127.0.0.1' ||
-          host.endsWith('.run.app') ||
-          host.endsWith('.vercel.app') ||
-          host.endsWith('.sch.id');
-        return callback(null, isAllowed);
-      } catch {
-        return callback(null, false);
+  return (req, callback) => {
+    const origin = req.headers?.origin;
+    const baseOptions = {
+      credentials: true,
+      allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+    };
+    if (!origin) return callback(null, { ...baseOptions, origin: true });
+    try {
+      const parsed = new URL(origin);
+      const originHost = parsed.host.toLowerCase();
+      const host = parsed.hostname.toLowerCase();
+      const reqHost = String(req.headers?.['x-forwarded-host'] || req.headers?.host || '')
+        .split(',')[0]
+        .trim()
+        .toLowerCase();
+      let appUrlHost = '';
+      if (process.env.APP_URL) {
+        try {
+          appUrlHost = new URL(process.env.APP_URL).hostname.toLowerCase();
+        } catch {
+          appUrlHost = '';
+        }
       }
-    },
-    credentials: true,
-    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+      const isAllowed =
+        (reqHost && originHost === reqHost) ||
+        (appUrlHost && host === appUrlHost) ||
+        host === 'localhost' ||
+        host === '127.0.0.1' ||
+        host.endsWith('.run.app') ||
+        host.endsWith('.vercel.app') ||
+        host.endsWith('.sch.id');
+      return callback(null, { ...baseOptions, origin: isAllowed });
+    } catch {
+      return callback(null, { ...baseOptions, origin: false });
+    }
   };
 }
 

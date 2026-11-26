@@ -13,15 +13,48 @@ import {
   MOCK_STUDENT_ATTITUDE,
 } from './mockData';
 import { generateId } from '../utils/helpers';
-import { getAuthHeaders, notifyAuthExpired } from './authToken';
+import { getAuthHeaders, getAuthToken, setAuthToken, notifyAuthExpired } from './authToken';
 import { setCachedAttendance, removeCachedAttendance, getJakartaToday } from './attendanceCache';
 export { getCachedAttendance, setCachedAttendance, removeCachedAttendance, getJakartaToday } from './attendanceCache';
 
 /* ============================================================
    SHARED FETCH HELPER (Bearer Token + JSON Parsing + 401 Handler)
    ============================================================ */
+let activeSessionCheckPromise = null;
+
+async function verifyOrRefreshSession() {
+  if (activeSessionCheckPromise) return activeSessionCheckPromise;
+  activeSessionCheckPromise = (async () => {
+    try {
+      const checkRes = await fetch('/api/auth/me', {
+        credentials: 'include',
+        cache: 'no-store',
+        headers: getAuthHeaders({ 'X-Requested-With': 'XMLHttpRequest' }),
+      });
+      if (!checkRes.ok) {
+        return { recovered: false, confirmedExpired: checkRes.status === 401 };
+      }
+      const payload = await checkRes.json().catch(() => null);
+      if (payload?.success && payload.user) {
+        if (payload.token) {
+          setAuthToken(payload.token);
+        }
+        return { recovered: true, confirmedExpired: false };
+      }
+      return { recovered: false, confirmedExpired: payload?.authenticated === false };
+    } catch {
+      // Network hiccup: never kick the user out on temporary offline/network error
+      return { recovered: false, confirmedExpired: false };
+    } finally {
+      activeSessionCheckPromise = null;
+    }
+  })();
+  return activeSessionCheckPromise;
+}
+
 async function apiFetch(url, options = {}) {
-  const { headers = {}, body, skipAuthExpiry = false, ...rest } = options;
+  const { headers = {}, body, skipAuthExpiry = false, _retriedAfterRefresh = false, ...rest } = options;
+  const tokenAtStart = getAuthToken();
   const finalHeaders = getAuthHeaders({
     'X-Requested-With': 'XMLHttpRequest',
     ...headers,
@@ -33,8 +66,10 @@ async function apiFetch(url, options = {}) {
     finalBody = JSON.stringify(body);
   }
 
+  const isAuthEndpoint = typeof url === 'string' && url.startsWith('/api/auth/');
   const res = await fetch(url, {
     credentials: 'include',
+    ...(isAuthEndpoint ? { cache: 'no-store' } : {}),
     ...rest,
     headers: finalHeaders,
     body: finalBody,
@@ -44,8 +79,28 @@ async function apiFetch(url, options = {}) {
   const isJson = contentType.includes('application/json');
   const data = isJson ? await res.json().catch(() => null) : null;
 
+  // Hanya akhiri sesi jika 401 terkonfirmasi oleh /api/auth/me dan bukan race condition login baru
   if (res.status === 401 && !skipAuthExpiry) {
-    notifyAuthExpired();
+    const currentToken = getAuthToken();
+    const isStalePreLoginRequest = !tokenAtStart && Boolean(currentToken);
+    const tokenChangedSinceStart = Boolean(currentToken && tokenAtStart && tokenAtStart !== currentToken);
+
+    if (!isStalePreLoginRequest && !tokenChangedSinceStart) {
+      if (!_retriedAfterRefresh) {
+        const recovery = await verifyOrRefreshSession();
+        if (recovery.recovered) {
+          return apiFetch(url, { ...options, _retriedAfterRefresh: true });
+        }
+        if (recovery.confirmedExpired) {
+          const latestToken = getAuthToken();
+          if (!latestToken || latestToken === tokenAtStart) {
+            notifyAuthExpired();
+          }
+        }
+      } else {
+        notifyAuthExpired();
+      }
+    }
   }
 
   return { ok: res.ok, status: res.status, data };
@@ -114,6 +169,24 @@ export async function getCurrentUser() {
     return { success: false };
   } catch {
     return { success: false };
+  }
+}
+
+export async function changeMyPassword(currentPassword, newPassword) {
+  try {
+    const res = await apiFetch('/api/auth/change-password', {
+      method: 'POST',
+      body: { currentPassword, newPassword },
+    });
+    if (res.ok && res.data?.success) {
+      if (res.data.token) {
+        setAuthToken(res.data.token);
+      }
+      return res.data;
+    }
+    return formatMutationResponse(res, 'Gagal memperbarui password.');
+  } catch {
+    return { success: false, error: 'Gagal menghubungi server.' };
   }
 }
 

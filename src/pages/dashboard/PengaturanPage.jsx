@@ -7,6 +7,8 @@ import { MapContainer, TileLayer, Circle, Marker, useMapEvents } from 'react-lea
 import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
 import { useSettings } from '../../hooks/useSettings';
+import { changeMyPassword } from '../../services/api';
+import { getAuthHeaders } from '../../services/authToken';
 import Card from '../../components/ui/Card';
 import Button from '../../components/ui/Button';
 import Input from '../../components/ui/Input';
@@ -42,6 +44,12 @@ export default function PengaturanPage() {
   const [savingGeofence, setSavingGeofence] = useState(false);
   const [toast, setToast] = useState(null);
 
+  // --- ACCOUNT PASSWORD CHANGE STATES ---
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [savingPassword, setSavingPassword] = useState(false);
+
   useEffect(() => {
     if (settings?.geofence) {
       setPosition({
@@ -68,7 +76,10 @@ export default function PengaturanPage() {
     setIsFetchingStatus(true);
     setPingError(null);
     try {
-      const res = await fetch('/api/keep-alive/status');
+      const res = await fetch('/api/keep-alive/status', {
+        credentials: 'include',
+        headers: getAuthHeaders({ 'X-Requested-With': 'XMLHttpRequest' }),
+      });
       if (!res.ok) {
         throw new Error(`Server returned HTTP ${res.status}`);
       }
@@ -100,7 +111,11 @@ export default function PengaturanPage() {
     try {
       const res = await fetch('/api/keep-alive/ping', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        headers: getAuthHeaders({
+          'Content-Type': 'application/json',
+          'X-Requested-With': 'XMLHttpRequest',
+        }),
         body: JSON.stringify({
           pingType: 'MANUAL_ADMIN',
           triggeredBy: 'Admin (Manual)',
@@ -133,6 +148,33 @@ export default function PengaturanPage() {
       setToast({ type: 'success', message: res.message || 'Pengaturan Geofence berhasil disimpan untuk semua perangkat.' });
     } else {
       setToast({ type: 'error', message: res?.error || 'Gagal menyimpan pengaturan Geofence.' });
+    }
+  };
+
+  const handlePasswordChange = async (e) => {
+    e.preventDefault();
+    if (!currentPassword || !newPassword) {
+      setToast({ type: 'error', message: 'Password lama dan password baru wajib diisi.' });
+      return;
+    }
+    if (newPassword.trim().length < 8) {
+      setToast({ type: 'error', message: 'Password baru minimal harus 8 karakter.' });
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      setToast({ type: 'error', message: 'Konfirmasi password baru tidak cocok.' });
+      return;
+    }
+    setSavingPassword(true);
+    const res = await changeMyPassword(currentPassword, newPassword);
+    setSavingPassword(false);
+    if (res?.success) {
+      setCurrentPassword('');
+      setNewPassword('');
+      setConfirmPassword('');
+      setToast({ type: 'success', message: res.message || 'Password berhasil diperbarui!' });
+    } else {
+      setToast({ type: 'error', message: res?.error || 'Gagal memperbarui password.' });
     }
   };
 
@@ -235,6 +277,52 @@ export default function PengaturanPage() {
           <div style={{ marginTop: 'var(--space-6)', padding: 'var(--space-3)', background: 'var(--color-warning-light)', borderRadius: 'var(--radius-md)', fontSize: 'var(--font-size-xs)', color: '#92400E' }}>
             <strong>Penting:</strong> Pastikan titik koordinat berada pas di area utama sekolah. Semua guru harus berada di dalam lingkaran (radius) untuk bisa absen.
           </div>
+        </Card>
+      </div>
+
+      {/* Keamanan Akun & Ganti Password */}
+      <div style={{ marginTop: 'var(--space-6)' }}>
+        <h2 style={{ fontSize: 'var(--font-size-xl)', fontWeight: 'var(--font-weight-bold)', marginBottom: 'var(--space-4)' }}>
+          🔐 Keamanan Akun Admin
+        </h2>
+        <Card>
+          <p style={{ color: 'var(--color-text-secondary)', fontSize: 'var(--font-size-sm)', marginBottom: 'var(--space-4)' }}>
+            Ganti password default agar akun aman dan tidak memunculkan peringatan kebocoran password dari Google Chrome. Gunakan minimal 8 karakter unik (kombinasi huruf besar, kecil, dan angka).
+          </p>
+          <form onSubmit={handlePasswordChange} style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 'var(--space-4)', alignItems: 'end' }}>
+            <Input
+              label="Password Saat Ini"
+              type="password"
+              autoComplete="current-password"
+              value={currentPassword}
+              onChange={(e) => setCurrentPassword(e.target.value)}
+              placeholder="Masukkan password saat ini"
+              required
+            />
+            <Input
+              label="Password Baru (Min. 8 karakter)"
+              type="password"
+              autoComplete="new-password"
+              value={newPassword}
+              onChange={(e) => setNewPassword(e.target.value)}
+              placeholder="Contoh: Mu4ra#2026Bangsri"
+              required
+            />
+            <Input
+              label="Konfirmasi Password Baru"
+              type="password"
+              autoComplete="new-password"
+              value={confirmPassword}
+              onChange={(e) => setConfirmPassword(e.target.value)}
+              placeholder="Ulangi password baru"
+              required
+            />
+            <div style={{ marginBottom: 'var(--space-4)' }}>
+              <Button type="submit" fullWidth loading={savingPassword}>
+                Simpan Password Baru
+              </Button>
+            </div>
+          </form>
         </Card>
       </div>
 

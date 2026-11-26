@@ -13,6 +13,7 @@ const isProd = process.env.NODE_ENV === 'production';
 
 async function startServer() {
   const app = express();
+  app.set('trust proxy', 1);
 
   // Mount API routes first
   app.use(apiApp);

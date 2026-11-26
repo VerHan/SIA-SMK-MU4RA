@@ -5,6 +5,7 @@
 import { useState } from 'react';
 import { useAuth } from '../../hooks/useAuth';
 import { useNavigate } from 'react-router-dom';
+import { changeMyPassword } from '../../services/api';
 import PWAInstallButton from '../../components/shared/PWAInstallButton';
 
 function getInitials(name = '') {
@@ -30,6 +31,12 @@ export default function MobileProfilPage() {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
   const [confirmLogout, setConfirmLogout] = useState(false);
+  const [showPwdModal, setShowPwdModal] = useState(false);
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [pwdStatus, setPwdStatus] = useState(null);
+  const [savingPwd, setSavingPwd] = useState(false);
 
   const handleLogout = async () => {
     if (!confirmLogout) {
@@ -38,6 +45,30 @@ export default function MobileProfilPage() {
     }
     await logout();
     navigate('/login', { replace: true });
+  };
+
+  const handleChangePassword = async (e) => {
+    e.preventDefault();
+    setPwdStatus(null);
+    if (newPassword.trim().length < 8) {
+      setPwdStatus({ type: 'error', message: 'Password baru minimal 8 karakter.' });
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      setPwdStatus({ type: 'error', message: 'Konfirmasi password baru tidak cocok.' });
+      return;
+    }
+    setSavingPwd(true);
+    const res = await changeMyPassword(currentPassword, newPassword);
+    setSavingPwd(false);
+    if (res?.success) {
+      setCurrentPassword('');
+      setNewPassword('');
+      setConfirmPassword('');
+      setPwdStatus({ type: 'success', message: res.message || 'Password berhasil diperbarui!' });
+    } else {
+      setPwdStatus({ type: 'error', message: res?.error || 'Gagal mengganti password.' });
+    }
   };
 
   return (
@@ -106,6 +137,13 @@ export default function MobileProfilPage() {
         {MENU_ITEMS.map((item, i) => (
           <button
             key={i}
+            type="button"
+            onClick={() => {
+              if (item.label === 'Ganti Password') {
+                setPwdStatus(null);
+                setShowPwdModal(true);
+              }
+            }}
             style={{
               display: 'flex',
               alignItems: 'center',
@@ -190,6 +228,103 @@ export default function MobileProfilPage() {
         >
           Batal
         </button>
+      )}
+
+      {showPwdModal && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(15, 23, 42, 0.55)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: '20px',
+            zIndex: 1000,
+          }}
+          onClick={() => setShowPwdModal(false)}
+        >
+          <div
+            style={{
+              width: '100%',
+              maxWidth: '400px',
+              background: '#FFFFFF',
+              borderRadius: '18px',
+              padding: '20px',
+              boxShadow: '0 20px 45px rgba(15, 23, 42, 0.25)',
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+              <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 700, color: '#0F172A' }}>Ganti Password</h3>
+              <button
+                type="button"
+                onClick={() => setShowPwdModal(false)}
+                style={{ background: 'none', border: 'none', fontSize: '18px', cursor: 'pointer', color: '#64748B' }}
+              >
+                ✕
+              </button>
+            </div>
+            {pwdStatus && (
+              <div style={{
+                padding: '10px 12px',
+                borderRadius: '10px',
+                fontSize: '13px',
+                marginBottom: '12px',
+                background: pwdStatus.type === 'success' ? '#ECFDF5' : '#FEF2F2',
+                color: pwdStatus.type === 'success' ? '#065F46' : '#991B1B',
+              }}>
+                {pwdStatus.message}
+              </div>
+            )}
+            <form onSubmit={handleChangePassword} style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+              <input
+                type="password"
+                autoComplete="current-password"
+                placeholder="Password saat ini"
+                value={currentPassword}
+                onChange={(e) => setCurrentPassword(e.target.value)}
+                required
+                style={{ padding: '11px 12px', borderRadius: '10px', border: '1px solid #CBD5E1', fontSize: '14px' }}
+              />
+              <input
+                type="password"
+                autoComplete="new-password"
+                placeholder="Password baru (min. 8 karakter)"
+                value={newPassword}
+                onChange={(e) => setNewPassword(e.target.value)}
+                required
+                style={{ padding: '11px 12px', borderRadius: '10px', border: '1px solid #CBD5E1', fontSize: '14px' }}
+              />
+              <input
+                type="password"
+                autoComplete="new-password"
+                placeholder="Konfirmasi password baru"
+                value={confirmPassword}
+                onChange={(e) => setConfirmPassword(e.target.value)}
+                required
+                style={{ padding: '11px 12px', borderRadius: '10px', border: '1px solid #CBD5E1', fontSize: '14px' }}
+              />
+              <button
+                type="submit"
+                disabled={savingPwd}
+                style={{
+                  marginTop: '4px',
+                  padding: '12px',
+                  borderRadius: '12px',
+                  border: 'none',
+                  background: '#2563EB',
+                  color: '#FFFFFF',
+                  fontSize: '14px',
+                  fontWeight: 600,
+                  cursor: savingPwd ? 'wait' : 'pointer',
+                }}
+              >
+                {savingPwd ? 'Menyimpan...' : 'Simpan Password Baru'}
+              </button>
+            </form>
+          </div>
+        </div>
       )}
 
       <style>{`

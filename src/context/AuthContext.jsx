@@ -5,7 +5,7 @@
    (tidak menyimpan token JWT atau kredensial di localStorage).
    ============================================================ */
 
-import { createContext, useState, useCallback, useEffect } from 'react';
+import { createContext, useState, useCallback, useEffect, useRef } from 'react';
 import { loginUser as apiLogin, logoutUser as apiLogout, getCurrentUser } from '../services/api';
 import { setAuthToken, clearAuthToken } from '../services/authToken';
 import { clearLastRoute } from '../utils/sessionRouting';
@@ -14,9 +14,16 @@ const LEGACY_STORAGE_KEY = 'sia_smk_mu4ra_auth';
 
 export const AuthContext = createContext(null);
 
+function normalizeClientUser(rawUser) {
+  if (!rawUser || typeof rawUser !== 'object') return null;
+  const role = typeof rawUser.role === 'string' ? rawUser.role.trim().toLowerCase() : '';
+  return { ...rawUser, role };
+}
+
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
+  const authGenRef = useRef(0);
 
   useEffect(() => {
     /* Bersihkan penyimpanan token lama di localStorage jika masih tersisa */
@@ -27,36 +34,42 @@ export function AuthProvider({ children }) {
     }
 
     let cancelled = false;
+    const initGen = authGenRef.current;
+
     async function restoreSessionFromServer() {
       try {
         /* Memulihkan sesi dari HttpOnly cookie (jika PWA baru dibuka kembali) atau Bearer memori */
         const res = await getCurrentUser();
-        if (!cancelled) {
+        if (!cancelled && authGenRef.current === initGen) {
           if (res?.success && res.user) {
             if (res.token) {
               setAuthToken(res.token);
             }
-            setUser(res.user);
+            setUser(normalizeClientUser(res.user));
           } else {
             clearAuthToken();
             setUser(null);
           }
         }
       } catch {
-        if (!cancelled) {
+        if (!cancelled && authGenRef.current === initGen) {
           clearAuthToken();
           setUser(null);
         }
       } finally {
-        if (!cancelled) setIsLoading(false);
+        if (!cancelled && authGenRef.current === initGen) {
+          setIsLoading(false);
+        }
       }
     }
 
     restoreSessionFromServer();
 
     const handleExpired = () => {
+      authGenRef.current += 1;
       clearAuthToken();
       setUser(null);
+      setIsLoading(false);
     };
     window.addEventListener('sia-auth-expired', handleExpired);
     return () => {
@@ -66,27 +79,28 @@ export function AuthProvider({ children }) {
   }, []);
 
   const login = useCallback(async (username, password, rememberMe = true) => {
-    setIsLoading(true);
+    authGenRef.current += 1;
     try {
       const result = await apiLogin(username, password, rememberMe);
       if (result.success && result.user) {
+        const normalized = normalizeClientUser(result.user);
         if (result.token) {
           setAuthToken(result.token);
         }
-        setUser(result.user);
-        return { success: true, user: result.user };
+        setUser(normalized);
+        setIsLoading(false);
+        return { success: true, user: normalized };
       }
       clearAuthToken();
       return { success: false, error: result.error || 'Username atau password salah.' };
     } catch {
       clearAuthToken();
       return { success: false, error: 'Terjadi kesalahan jaringan. Coba lagi.' };
-    } finally {
-      setIsLoading(false);
     }
   }, []);
 
   const logout = useCallback(async () => {
+    authGenRef.current += 1;
     clearAuthToken();
     setUser(null);
     clearLastRoute();

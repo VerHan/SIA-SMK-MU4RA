@@ -5,12 +5,17 @@ import {
   computeAttendanceRiskTier,
   hashPasswordAsync,
   isValidRole,
+  normalizeRole,
   requireAuth,
   requirePiketAccess,
   requireRole,
   requireStudentReadAccess,
   sanitizeSafeUrl,
+  setAuthNoStoreHeaders,
+  setSessionCookie,
   signToken,
+  validateNewPassword,
+  verifyPasswordAsync,
 } from './authUtils.js';
 import { MOCK_TIME_SLOTS, MOCK_NEWS } from '../src/services/mockData.js';
 
@@ -26,10 +31,17 @@ export function createExtraPrismaRoutes(prisma, { getActiveTahunAjar } = {}) {
   // ==========================================
   // 1. AUTH SESSION & USER CRUD (ADMIN)
   // ==========================================
-  router.get('/auth/me', requireAuth, async (req, res) => {
+  router.get('/auth/me', async (req, res) => {
+    setAuthNoStoreHeaders(res);
+    if (!req.authUser) {
+      return res.status(200).json({ success: false, authenticated: false, user: null });
+    }
     try {
       const user = await prisma.user.findUnique({ where: { id: req.authUser.id } });
-      if (!user) return res.status(401).json({ success: false, error: 'Akun tidak ditemukan' });
+      if (!user) {
+        clearSessionCookie(req, res);
+        return res.status(200).json({ success: false, authenticated: false, user: null });
+      }
       const homeroomClasses = user.teacherId
         ? await prisma.kelas.findMany({
             where: { teacherId: user.teacherId },
@@ -37,12 +49,13 @@ export function createExtraPrismaRoutes(prisma, { getActiveTahunAjar } = {}) {
             orderBy: { name: 'asc' },
           }).catch(() => [])
         : [];
-      const isPiket = user.role === 'guru' ? Boolean(user.isPiket) : false;
+      const normalizedRole = normalizeRole(user.role);
+      const isPiket = normalizedRole === 'guru' ? Boolean(user.isPiket) : false;
       const baseUser = {
         id: user.id,
         username: user.username,
         name: user.name,
-        role: user.role,
+        role: normalizedRole,
         isPiket,
         teacherId: user.teacherId || null,
         studentId: user.studentId || null,
@@ -53,8 +66,10 @@ export function createExtraPrismaRoutes(prisma, { getActiveTahunAjar } = {}) {
         capabilities: buildUserCapabilities(baseUser, homeroomClasses),
       };
       const token = signToken(safeUser, { rememberMe: true });
+      setSessionCookie(req, res, token, { rememberMe: true });
       res.json({
         success: true,
+        authenticated: true,
         token,
         user: safeUser,
       });
@@ -66,6 +81,44 @@ export function createExtraPrismaRoutes(prisma, { getActiveTahunAjar } = {}) {
   router.post('/auth/logout', (req, res) => {
     clearSessionCookie(req, res);
     res.json({ success: true, message: 'Berhasil keluar dari sesi.' });
+  });
+
+  // Self-service password change for any authenticated user (verifies old password & refreshes session)
+  router.post('/auth/change-password', requireAuth, async (req, res) => {
+    try {
+      const { currentPassword, newPassword } = req.body || {};
+      if (!currentPassword || !newPassword) {
+        return res.status(400).json({ success: false, error: 'Password lama dan password baru wajib diisi.' });
+      }
+      const user = await prisma.user.findUnique({ where: { id: req.authUser.id } });
+      if (!user) {
+        return res.status(404).json({ success: false, error: 'Akun tidak ditemukan.' });
+      }
+      const { valid: oldValid } = await verifyPasswordAsync(currentPassword, user.password);
+      if (!oldValid) {
+        return res.status(400).json({ success: false, error: 'Password lama tidak sesuai.' });
+      }
+      const check = validateNewPassword(newPassword, currentPassword);
+      if (!check.valid) {
+        return res.status(400).json({ success: false, error: check.error });
+      }
+
+      const hashed = await hashPasswordAsync(check.value);
+      await prisma.user.update({
+        where: { id: user.id },
+        data: { password: hashed },
+      });
+
+      const token = signToken(req.authUser, { rememberMe: true });
+      setSessionCookie(req, res, token, { rememberMe: true });
+      res.json({
+        success: true,
+        token,
+        message: 'Password berhasil diperbarui! Sesi login Anda tetap aktif.',
+      });
+    } catch (err) {
+      res.status(500).json({ success: false, error: err.message });
+    }
   });
 
   router.get('/users', requireRole('admin'), async (req, res) => {

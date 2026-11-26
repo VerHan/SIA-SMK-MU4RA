@@ -60,11 +60,11 @@ export default function LoginPage() {
 
     setLoading(true);
     const result = await login(username.trim(), password, rememberMe);
-    setLoading(false);
 
     if (result.success) {
       navigate(resolveTargetPath(result.user), { replace: true });
     } else {
+      setLoading(false);
       setError(result.error || 'Username atau password salah.');
     }
   };
@@ -166,6 +166,7 @@ export default function LoginPage() {
           <Input
             label="Username"
             type="text"
+            autoComplete="username"
             value={username}
             onChange={(e) => setUsername(e.target.value)}
             placeholder="Masukkan username"
@@ -176,6 +177,7 @@ export default function LoginPage() {
           <Input
             label="Password"
             type="password"
+            autoComplete="current-password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             placeholder="Masukkan password"

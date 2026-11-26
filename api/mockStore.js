@@ -27,7 +27,9 @@ import {
   formatJakartaTimeHHMM,
   hashPassword,
   hashPasswordAsync,
+  normalizeRole,
   verifyPasswordAsync,
+  setAuthNoStoreHeaders,
   setSessionCookie,
   signToken,
   isValidRole,
@@ -38,6 +40,7 @@ import {
   sanitizeSafeUrl,
   validateGeofenceConfig,
   validateGeofenceCoords,
+  validateNewPassword,
 } from './authUtils.js';
 
 const newId = () => crypto.randomUUID();
@@ -208,12 +211,13 @@ export function createMockApiRouter() {
           .filter(k => k.teacherId === user.teacherId)
           .map(k => ({ id: k.id, name: k.name }))
       : [];
-    const isPiket = user.role === 'guru' ? Boolean(user.isPiket) : false;
+    const normalizedRole = normalizeRole(user.role);
+    const isPiket = normalizedRole === 'guru' ? Boolean(user.isPiket) : false;
     const baseUser = {
       id: user.id,
       username: user.username,
       name: user.name,
-      role: user.role,
+      role: normalizedRole,
       isPiket,
       teacherId: user.teacherId || null,
       studentId: user.studentId || null,
@@ -227,6 +231,7 @@ export function createMockApiRouter() {
 
   // --- Auth & User Management ---
   router.post('/auth/login', async (req, res) => {
+    setAuthNoStoreHeaders(res);
     const { username, password, rememberMe = true } = req.body || {};
     if (!username || !password) {
       return res.status(400).json({ success: false, error: 'Username dan password wajib diisi' });
@@ -248,19 +253,57 @@ export function createMockApiRouter() {
   });
 
   router.post('/auth/logout', (req, res) => {
+    setAuthNoStoreHeaders(res);
     clearSessionCookie(req, res);
     return res.json({ success: true, message: 'Berhasil keluar dari sesi.' });
   });
 
-  router.get('/auth/me', requireAuth, (req, res) => {
+  router.get('/auth/me', (req, res) => {
+    setAuthNoStoreHeaders(res);
+    if (!req.authUser) {
+      return res.status(200).json({ success: false, authenticated: false, user: null });
+    }
     const user = users.find(u => u.id === req.authUser.id);
-    if (!user) return res.status(401).json({ success: false, error: 'Akun tidak ditemukan' });
+    if (!user) {
+      clearSessionCookie(req, res);
+      return res.status(200).json({ success: false, authenticated: false, user: null });
+    }
     const safeUser = buildSafeAuthUser(user);
     const token = signToken(safeUser, { rememberMe: true });
+    setSessionCookie(req, res, token, { rememberMe: true });
+    res.json({
+      success: true,
+      authenticated: true,
+      token,
+      user: safeUser,
+    });
+  });
+
+  router.post('/auth/change-password', requireAuth, async (req, res) => {
+    const { currentPassword, newPassword } = req.body || {};
+    if (!currentPassword || !newPassword) {
+      return res.status(400).json({ success: false, error: 'Password lama dan password baru wajib diisi.' });
+    }
+    const idx = users.findIndex(u => u.id === req.authUser.id);
+    if (idx === -1) {
+      return res.status(404).json({ success: false, error: 'Akun tidak ditemukan.' });
+    }
+    const { valid: oldValid } = await verifyPasswordAsync(currentPassword, users[idx].password);
+    if (!oldValid) {
+      return res.status(400).json({ success: false, error: 'Password lama tidak sesuai.' });
+    }
+    const check = validateNewPassword(newPassword, currentPassword);
+    if (!check.valid) {
+      return res.status(400).json({ success: false, error: check.error });
+    }
+    users[idx] = { ...users[idx], password: await hashPasswordAsync(check.value) };
+    const safeUser = buildSafeAuthUser(users[idx]);
+    const token = signToken(safeUser, { rememberMe: true });
+    setSessionCookie(req, res, token, { rememberMe: true });
     res.json({
       success: true,
       token,
-      user: safeUser,
+      message: 'Password berhasil diperbarui! Sesi login Anda tetap aktif.',
     });
   });
 
