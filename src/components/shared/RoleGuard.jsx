@@ -1,21 +1,33 @@
 /* ============================================================
-   RoleGuard — Komponen pembatas akses berdasarkan role
+   RoleGuard — Komponen pembatas akses berdasarkan role & kapabilitas
    
    Gunakan untuk membungkus konten yang hanya boleh diakses
-   oleh role tertentu. Menampilkan pesan 403 jika role 
-   user tidak sesuai.
+   oleh role atau tugas tertentu (misal Guru Piket / Wali Kelas /
+   Wali Murid). Menampilkan pesan 403 jika izin tidak sesuai.
    ============================================================ */
 
 import { useAuth } from '../../hooks/useAuth';
 
-export default function RoleGuard({ allowedRoles, children, fallback }) {
-  const { hasRole, user } = useAuth();
+const CAPABILITY_HINTS = {
+  canInputPiket: 'Fitur ini khusus untuk Guru dengan tugas Piket, Staff, atau Admin.',
+  canMonitorHomeroom: 'Fitur ini khusus untuk Wali Kelas, Kepsek, Staff, atau Admin.',
+  canMonitorOwnChild: 'Akun wali murid belum terhubung dengan data siswa. Hubungi admin sekolah.',
+};
 
-  if (!hasRole(allowedRoles)) {
-    /* Jika ada fallback custom, tampilkan itu */
+export default function RoleGuard({ allowedRoles, requiredCapability, children, fallback }) {
+  const { hasRole, hasCapability } = useAuth();
+
+  const roleOk = !allowedRoles || allowedRoles.length === 0 || hasRole(allowedRoles);
+  const capOk = !requiredCapability || hasCapability(requiredCapability);
+
+  if (!roleOk || !capOk) {
     if (fallback) return fallback;
 
-    /* Default: tampilkan pesan 403 Forbidden */
+    const hintKey = Array.isArray(requiredCapability) ? requiredCapability[0] : requiredCapability;
+    const detailMessage = (!capOk && hintKey && CAPABILITY_HINTS[hintKey])
+      ? CAPABILITY_HINTS[hintKey]
+      : 'Anda tidak memiliki izin untuk mengakses halaman ini. Hubungi administrator jika Anda merasa ini adalah kesalahan.';
+
     return (
       <div style={{
         display: 'flex',
@@ -43,10 +55,10 @@ export default function RoleGuard({ allowedRoles, children, fallback }) {
         </h2>
         <p style={{
           color: 'var(--color-text-secondary)',
-          maxWidth: '400px',
+          maxWidth: '420px',
+          lineHeight: 1.6,
         }}>
-          Anda tidak memiliki izin untuk mengakses halaman ini.
-          Hubungi administrator jika Anda merasa ini adalah kesalahan.
+          {detailMessage}
         </p>
       </div>
     );

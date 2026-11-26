@@ -6,8 +6,9 @@
    ============================================================ */
 
 import { createContext, useState, useCallback, useEffect } from 'react';
-import { loginUser as apiLogin, getCurrentUser } from '../services/api';
-import { setAuthToken, clearAuthToken, getAuthToken } from '../services/authToken';
+import { loginUser as apiLogin, logoutUser as apiLogout, getCurrentUser } from '../services/api';
+import { setAuthToken, clearAuthToken } from '../services/authToken';
+import { clearLastRoute } from '../utils/sessionRouting';
 
 const LEGACY_STORAGE_KEY = 'sia_smk_mu4ra_auth';
 
@@ -18,7 +19,7 @@ export function AuthProvider({ children }) {
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
-    /* Bersihkan penyimpanan sesi lama di localStorage jika masih tersisa */
+    /* Bersihkan penyimpanan token lama di localStorage jika masih tersisa */
     try {
       localStorage.removeItem(LEGACY_STORAGE_KEY);
     } catch {
@@ -26,15 +27,15 @@ export function AuthProvider({ children }) {
     }
 
     let cancelled = false;
-    async function verifyExistingMemorySession() {
-      if (!getAuthToken()) {
-        if (!cancelled) setIsLoading(false);
-        return;
-      }
+    async function restoreSessionFromServer() {
       try {
+        /* Memulihkan sesi dari HttpOnly cookie (jika PWA baru dibuka kembali) atau Bearer memori */
         const res = await getCurrentUser();
         if (!cancelled) {
           if (res?.success && res.user) {
+            if (res.token) {
+              setAuthToken(res.token);
+            }
             setUser(res.user);
           } else {
             clearAuthToken();
@@ -51,7 +52,7 @@ export function AuthProvider({ children }) {
       }
     }
 
-    verifyExistingMemorySession();
+    restoreSessionFromServer();
 
     const handleExpired = () => {
       clearAuthToken();
@@ -64,10 +65,10 @@ export function AuthProvider({ children }) {
     };
   }, []);
 
-  const login = useCallback(async (username, password) => {
+  const login = useCallback(async (username, password, rememberMe = true) => {
     setIsLoading(true);
     try {
-      const result = await apiLogin(username, password);
+      const result = await apiLogin(username, password, rememberMe);
       if (result.success && result.user) {
         if (result.token) {
           setAuthToken(result.token);
@@ -85,20 +86,45 @@ export function AuthProvider({ children }) {
     }
   }, []);
 
-  const logout = useCallback(() => {
+  const logout = useCallback(async () => {
     clearAuthToken();
     setUser(null);
+    clearLastRoute();
     try {
       localStorage.removeItem(LEGACY_STORAGE_KEY);
     } catch {
       /* Abaikan */
     }
+    await apiLogout();
   }, []);
 
   const hasRole = useCallback((allowedRoles) => {
-    if (!user) return false;
+    if (!user || !Array.isArray(allowedRoles) || allowedRoles.length === 0) return false;
     return allowedRoles.includes(user.role);
   }, [user]);
+
+  const capabilities = user?.capabilities || {
+    canAccessAdmin: user?.role === 'admin',
+    canManageUsers: user?.role === 'admin',
+    canInputPiket: user?.role === 'admin' || user?.role === 'staff' || (user?.role === 'guru' && Boolean(user?.isPiket)),
+    canInputMapel: user?.role === 'admin' || user?.role === 'guru',
+    canMonitorSchool: ['admin', 'staff', 'kepsek'].includes(user?.role),
+    canMonitorHomeroom: ['admin', 'staff', 'kepsek'].includes(user?.role) || (user?.role === 'guru' && Array.isArray(user?.homeroomClasses) && user.homeroomClasses.length > 0),
+    canMonitorOwnChild: user?.role === 'wali_murid' && Boolean(user?.studentId),
+  };
+
+  const hasCapability = useCallback((required) => {
+    if (!user) return false;
+    if (Array.isArray(required)) {
+      return required.some(cap => Boolean(capabilities[cap]));
+    }
+    return Boolean(capabilities[required]);
+  }, [user, capabilities]);
+
+  const homeroomClasses = Array.isArray(user?.homeroomClasses) ? user.homeroomClasses : [];
+  const isPiket = user?.role === 'guru' && Boolean(user?.isPiket);
+  const isHomeroomTeacher = user?.role === 'guru' && homeroomClasses.length > 0;
+  const isGuardian = user?.role === 'wali_murid';
 
   const value = {
     user,
@@ -107,6 +133,12 @@ export function AuthProvider({ children }) {
     login,
     logout,
     hasRole,
+    hasCapability,
+    capabilities,
+    isPiket,
+    isHomeroomTeacher,
+    homeroomClasses,
+    isGuardian,
   };
 
   return (

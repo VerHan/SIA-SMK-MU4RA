@@ -23,9 +23,12 @@ export default function GuruAbsenPiketPage() {
   const [submitting, setSubmitting] = useState(false);
   const [toast, setToast] = useState(null);
 
-  // States for Kehadiran Pagi & Sore
+  // States for Kehadiran Pagi & Sore + Optimistic Concurrency Metadata
   const [attendancePagi, setAttendancePagi] = useState({});
   const [attendanceSore, setAttendanceSore] = useState({});
+  const [recordMeta, setRecordMeta] = useState({});
+  const [conflictBanner, setConflictBanner] = useState('');
+  const [reloadTick, setReloadTick] = useState(0);
 
   // States for Rekap Bulanan
   const [rekapMonth, setRekapMonth] = useState(new Date().toISOString().substring(0, 7)); // YYYY-MM
@@ -70,27 +73,35 @@ export default function GuruAbsenPiketPage() {
   useEffect(() => {
     if (selectedClass && activeTab === 'input') {
       setLoading(true);
+      setConflictBanner('');
       Promise.all([
         getStudents(selectedClass),
         getAttendance(selectedClass, selectedDate)
       ]).then(([studentsData, attData]) => {
         setStudents(studentsData);
         
-        // Populate existing data or default to 'hadir'
+        // Populate existing data or default to 'hadir' while tracking server version
         const initialPagi = {};
         const initialSore = {};
+        const meta = {};
         studentsData.forEach(s => {
           const existing = attData.find(a => a.studentId === s.id);
           initialPagi[s.id] = existing?.statusPagi || 'hadir';
           initialSore[s.id] = existing?.statusSore || 'hadir';
+          meta[s.id] = {
+            updatedAt: existing?.updatedAt || null,
+            statusPagi: existing?.statusPagi || null,
+            statusSore: existing?.statusSore || null,
+          };
         });
         
         setAttendancePagi(initialPagi);
         setAttendanceSore(initialSore);
+        setRecordMeta(meta);
         setLoading(false);
       });
     }
-  }, [selectedClass, selectedDate, activeTab]);
+  }, [selectedClass, selectedDate, activeTab, reloadTick]);
 
   // Fetch Rekap Data
   useEffect(() => {
@@ -117,20 +128,42 @@ export default function GuruAbsenPiketPage() {
 
   const handleSave = async () => {
     setSubmitting(true);
-    const records = students.map(s => ({
-      studentId: s.id,
-      studentName: s.name,
-      class: selectedClass,
-      date: selectedDate,
-      statusPagi: attendancePagi[s.id],
-      statusSore: attendanceSore[s.id],
-    }));
+    setConflictBanner('');
+    const records = students.map(s => {
+      const meta = recordMeta[s.id] || {};
+      return {
+        studentId: s.id,
+        studentName: s.name,
+        class: selectedClass,
+        date: selectedDate,
+        ...(sesi === 'pagi'
+          ? { statusPagi: attendancePagi[s.id], expectedStatusPagi: meta.statusPagi }
+          : { statusSore: attendanceSore[s.id], expectedStatusSore: meta.statusSore }),
+        expectedUpdatedAt: meta.updatedAt || null,
+      };
+    });
 
-    const result = await saveAttendance(records);
+    const result = await saveAttendance(records, { session: sesi });
     setSubmitting(false);
     
     if (result.success) {
-      setToast({ message: `Absensi ${sesi} kelas ${selectedClass} berhasil disimpan!`, type: 'success' });
+      if (Array.isArray(result.records)) {
+        setRecordMeta(prev => {
+          const next = { ...prev };
+          result.records.forEach(r => {
+            next[r.studentId] = {
+              updatedAt: r.updatedAt || new Date().toISOString(),
+              statusPagi: r.statusPagi || null,
+              statusSore: r.statusSore || null,
+            };
+          });
+          return next;
+        });
+      }
+      setToast({ message: `Absensi sesi ${sesi} kelas ${selectedClass} berhasil disimpan!`, type: 'success' });
+    } else if (result.conflict) {
+      setConflictBanner(result.error || 'Data absensi sesi ini baru saja diubah oleh petugas lain.');
+      setToast({ message: 'Konflik input terdeteksi. Muat ulang data terbaru.', type: 'error' });
     } else {
       setToast({ message: result.error || 'Gagal menyimpan absensi.', type: 'error' });
     }
@@ -411,6 +444,28 @@ export default function GuruAbsenPiketPage() {
           </div>
         </div>
       </Card>
+
+      {conflictBanner && (
+        <div style={{
+          marginBottom: 'var(--space-4)',
+          padding: '12px 16px',
+          borderRadius: 'var(--radius-lg)',
+          background: '#FEF2F2',
+          border: '1px solid #FECACA',
+          color: '#991B1B',
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          gap: '12px',
+          flexWrap: 'wrap',
+          fontSize: 'var(--font-size-sm)',
+        }}>
+          <span>⚠️ {conflictBanner}</span>
+          <Button size="xs" variant="danger" onClick={() => setReloadTick(t => t + 1)}>
+            Muat Ulang Data Terbaru
+          </Button>
+        </div>
+      )}
 
       <Card padding={activeTab === 'rekap' ? "var(--space-4) 0 0 0" : "0"}>
         {activeTab === 'input' ? (

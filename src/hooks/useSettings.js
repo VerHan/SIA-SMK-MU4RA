@@ -1,32 +1,70 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { SCHOOL_GEOFENCE as DEFAULT_GEOFENCE } from '../config/constants';
+import { getGeofenceSettings, updateGeofenceSettings } from '../services/api';
 
 const SETTINGS_KEY = 'sia_settings';
 
-export function useSettings() {
-  const [settings, setSettings] = useState(() => {
-    try {
-      const saved = localStorage.getItem(SETTINGS_KEY);
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        // If old mock coordinates were saved, migrate to new official coordinates
-        if (parsed.geofence?.latitude === -6.5295) {
-          parsed.geofence = DEFAULT_GEOFENCE;
-          localStorage.setItem(SETTINGS_KEY, JSON.stringify(parsed));
-        }
-        return parsed;
+function readCachedGeofence() {
+  try {
+    const saved = localStorage.getItem(SETTINGS_KEY);
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      if (parsed.geofence?.latitude === -6.5295) {
+        parsed.geofence = DEFAULT_GEOFENCE;
+        localStorage.setItem(SETTINGS_KEY, JSON.stringify(parsed));
       }
-    } catch (error) {
-      console.error('Failed to parse settings from localStorage', error);
+      if (parsed.geofence) return parsed;
     }
-    return { geofence: DEFAULT_GEOFENCE };
-  });
+  } catch (error) {
+    console.error('Failed to parse settings from localStorage', error);
+  }
+  return { geofence: DEFAULT_GEOFENCE };
+}
 
-  const updateGeofence = (newGeofence) => {
-    const newSettings = { ...settings, geofence: newGeofence };
-    setSettings(newSettings);
-    localStorage.setItem(SETTINGS_KEY, JSON.stringify(newSettings));
-  };
+export function useSettings() {
+  const [settings, setSettings] = useState(() => readCachedGeofence());
+  const [loadingSettings, setLoadingSettings] = useState(true);
 
-  return { settings, updateGeofence };
+  useEffect(() => {
+    let cancelled = false;
+    getGeofenceSettings()
+      .then((res) => {
+        if (!cancelled && res?.success && res.data) {
+          setSettings((prev) => {
+            const next = { ...prev, geofence: res.data };
+            try {
+              localStorage.setItem(SETTINGS_KEY, JSON.stringify(next));
+            } catch {
+              /* Abaikan */
+            }
+            return next;
+          });
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingSettings(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const updateGeofence = useCallback(async (newGeofence) => {
+    const res = await updateGeofenceSettings(newGeofence);
+    if (res?.success && res.data) {
+      setSettings((prev) => {
+        const next = { ...prev, geofence: res.data };
+        try {
+          localStorage.setItem(SETTINGS_KEY, JSON.stringify(next));
+        } catch {
+          /* Abaikan */
+        }
+        return next;
+      });
+      return { success: true, data: res.data, message: res.message };
+    }
+    return { success: false, error: res?.error || 'Gagal menyimpan pengaturan geofence.' };
+  }, []);
+
+  return { settings, loadingSettings, updateGeofence };
 }

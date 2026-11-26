@@ -21,7 +21,6 @@ export default defineConfig({
       '@tanstack/react-query',
       'leaflet',
       'react-leaflet',
-      'xlsx',
     ],
   },
   server: {
@@ -32,5 +31,17 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     sourcemap: false,
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (!id.includes('node_modules')) return;
+          if (id.includes('xlsx')) return 'vendor-xlsx';
+          if (id.includes('recharts') || id.includes('d3-')) return 'vendor-charts';
+          if (id.includes('leaflet')) return 'vendor-maps';
+          if (id.includes('@tanstack/react-query')) return 'vendor-query';
+          if (id.includes('react-router')) return 'vendor-router';
+        },
+      },
+    },
   },
 });

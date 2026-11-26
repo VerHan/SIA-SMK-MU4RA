@@ -9,26 +9,44 @@ import { useState } from 'react';
 import { useNavigate, useLocation, Link, Navigate } from 'react-router-dom';
 import { useAuth } from '../../hooks/useAuth';
 import { SCHOOL_INFO } from '../../config/constants';
+import { getResumePathForUser, isRouteAllowedForUser } from '../../utils/sessionRouting';
 import Button from '../../components/ui/Button';
 import Input from '../../components/ui/Input';
+import LoadingSpinner from '../../components/shared/LoadingSpinner';
+import PWAInstallButton from '../../components/shared/PWAInstallButton';
 
 export default function LoginPage() {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
+  const [rememberMe, setRememberMe] = useState(true);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
-  const { login, isAuthenticated, user } = useAuth();
+  const { login, isAuthenticated, isLoading: authLoading, user } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
 
-  /* URL tujuan setelah login (jika ada) */
+  /* URL tujuan setelah login (jika ada dan sesuai role) */
   const customRedirect = location.state?.from?.pathname;
+  const resolveTargetPath = (targetUser) => {
+    if (customRedirect && isRouteAllowedForUser(customRedirect, targetUser)) {
+      return customRedirect;
+    }
+    return getResumePathForUser(targetUser);
+  };
 
-  /* Jika sudah login, redirect sesuai role */
-  if (isAuthenticated) {
-    const defaultTarget = user?.role === 'admin' ? '/dashboard/ringkasan' : '/app/home';
-    return <Navigate to={customRedirect || defaultTarget} replace />;
+  /* Tunggu verifikasi sesi/cookie selesai agar form login tidak berkedip */
+  if (authLoading && !loading) {
+    return (
+      <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--color-bg)' }}>
+        <LoadingSpinner message="Memeriksa sesi login..." />
+      </div>
+    );
+  }
+
+  /* Jika sudah login, langsung lanjut ke tampilan SIA terakhir / dashboard */
+  if (isAuthenticated && user) {
+    return <Navigate to={resolveTargetPath(user)} replace />;
   }
 
   const handleSubmit = async (e) => {
@@ -41,17 +59,11 @@ export default function LoginPage() {
     }
 
     setLoading(true);
-    const result = await login(username.trim(), password);
+    const result = await login(username.trim(), password, rememberMe);
     setLoading(false);
 
     if (result.success) {
-      if (customRedirect && customRedirect !== '/login') {
-        navigate(customRedirect, { replace: true });
-      } else if (result.user?.role === 'admin') {
-        navigate('/dashboard/ringkasan', { replace: true });
-      } else {
-        navigate('/app/home', { replace: true });
-      }
+      navigate(resolveTargetPath(result.user), { replace: true });
     } else {
       setError(result.error || 'Username atau password salah.');
     }
@@ -171,16 +183,41 @@ export default function LoginPage() {
             icon={<span style={{ fontSize: '16px' }}>🔒</span>}
           />
 
+          <label style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '8px',
+            marginTop: 'var(--space-1)',
+            marginBottom: 'var(--space-4)',
+            fontSize: 'var(--font-size-xs)',
+            color: 'var(--color-text-secondary)',
+            cursor: 'pointer',
+            userSelect: 'none',
+          }}>
+            <input
+              type="checkbox"
+              checked={rememberMe}
+              onChange={(e) => setRememberMe(e.target.checked)}
+              style={{ width: '16px', height: '16px', accentColor: 'var(--color-primary)', cursor: 'pointer' }}
+            />
+            <span>Tetap masuk di perangkat ini (30 hari)</span>
+          </label>
+
           <Button
             type="submit"
             fullWidth
             loading={loading}
             size="lg"
-            style={{ marginTop: 'var(--space-2)' }}
+            style={{ marginTop: 'var(--space-1)' }}
           >
             Masuk
           </Button>
         </form>
+
+        {/* In-App Install PWA Button (otomatis tersembunyi jika sudah ter-install) */}
+        <div style={{ marginTop: 'var(--space-4)' }}>
+          <PWAInstallButton fullWidth />
+        </div>
 
         {/* Demo accounts info */}
         <div style={{
@@ -200,19 +237,20 @@ export default function LoginPage() {
           </div>
           <div style={{ display: 'grid', gap: '4px' }}>
             <div><strong>Admin:</strong> admin / admin123</div>
-            <div><strong>Guru:</strong> guru1 / guru123</div>
+            <div><strong>Guru Piket & Wali Kelas:</strong> guru1 / guru123</div>
+            <div><strong>Guru Reguler (Non-Piket):</strong> guru2 / guru123</div>
             <div><strong>Staff:</strong> staff1 / staff123</div>
             <div><strong>Wali Murid:</strong> wali1 / wali123</div>
           </div>
         </div>
 
-        {/* Back to home */}
+        {/* Back to public profile */}
         <div style={{ textAlign: 'center', marginTop: 'var(--space-6)' }}>
-          <Link to="/" style={{
+          <Link to="/?view=public" style={{
             color: 'var(--color-text-muted)',
             fontSize: 'var(--font-size-sm)',
           }}>
-            ← Kembali ke Beranda
+            ← Lihat Website Profil Sekolah
           </Link>
         </div>
       </div>

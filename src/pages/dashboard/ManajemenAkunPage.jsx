@@ -27,6 +27,7 @@ const EMPTY_FORM = {
   username: '',
   password: '',
   role: USER_ROLES.GURU,
+  isPiket: false,
   teacherId: '',
   studentId: '',
 };
@@ -133,7 +134,8 @@ export default function ManajemenAkunPage() {
     total: users.length,
     admin: users.filter(u => u.role === 'admin').length,
     guru: users.filter(u => u.role === 'guru').length,
-    lainnya: users.filter(u => !['admin', 'guru'].includes(u.role)).length,
+    guruPiket: users.filter(u => u.role === 'guru' && u.isPiket).length,
+    waliMurid: users.filter(u => u.role === 'wali_murid').length,
   }), [users]);
 
   const openCreateModal = () => {
@@ -149,6 +151,7 @@ export default function ManajemenAkunPage() {
       username: account.username || '',
       password: '',
       role: account.role || USER_ROLES.GURU,
+      isPiket: Boolean(account.isPiket),
       teacherId: account.teacherId || '',
       studentId: account.studentId || '',
     });
@@ -169,13 +172,18 @@ export default function ManajemenAkunPage() {
       setToast({ message: 'Password baru minimal 6 karakter.', type: 'error' });
       return;
     }
+    if (formData.role === USER_ROLES.WALI_MURID && !formData.studentId) {
+      setToast({ message: 'Akun Wali Murid wajib dihubungkan ke satu data siswa.', type: 'error' });
+      return;
+    }
 
     const payload = {
       name: formData.name.trim(),
       username: formData.username.trim(),
       role: formData.role,
-      teacherId: formData.role === 'guru' ? (formData.teacherId || null) : null,
-      studentId: formData.role === 'wali_murid' ? (formData.studentId || null) : null,
+      isPiket: formData.role === USER_ROLES.GURU ? Boolean(formData.isPiket) : false,
+      teacherId: formData.role === USER_ROLES.GURU ? (formData.teacherId || null) : null,
+      studentId: formData.role === USER_ROLES.WALI_MURID ? (formData.studentId || null) : null,
     };
     if (formData.password) {
       payload.password = formData.password;
@@ -186,11 +194,14 @@ export default function ManajemenAkunPage() {
   const getLinkedLabel = (account) => {
     if (account.teacherId) {
       const t = teachers.find(g => g.id === account.teacherId);
-      return t ? `Guru: ${t.name}` : `ID Guru: ${account.teacherId}`;
+      const homeroomNames = Array.isArray(account.homeroomClasses) && account.homeroomClasses.length > 0
+        ? ` • Wali Kelas: ${account.homeroomClasses.map(c => c.name).join(', ')}`
+        : '';
+      return `${t ? `Guru: ${t.name}` : `ID Guru: ${account.teacherId}`}${homeroomNames}`;
     }
     if (account.studentId) {
       const s = students.find(st => st.id === account.studentId);
-      return s ? `Siswa: ${s.name}` : `ID Siswa: ${account.studentId}`;
+      return s ? `Siswa: ${s.name} (${s.class})` : (account.studentName ? `Siswa: ${account.studentName}` : `ID Siswa: ${account.studentId}`);
     }
     return '—';
   };
@@ -213,18 +224,18 @@ export default function ManajemenAkunPage() {
       </div>
 
       {/* KPI Strip */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 'var(--space-4)', marginBottom: 'var(--space-6)' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: 'var(--space-4)', marginBottom: 'var(--space-6)' }}>
         {[
           { label: 'Total Akun Aktif', value: roleCounts.total, color: 'var(--color-primary)' },
           { label: 'Administrator', value: roleCounts.admin, color: '#DC2626' },
-          { label: 'Akun Guru', value: roleCounts.guru, color: '#2563EB' },
-          { label: 'Staff / Kepsek / Wali', value: roleCounts.lainnya, color: '#059669' },
+          { label: 'Akun Guru (Piket)', value: isLoading ? '—' : `${roleCounts.guru} (${roleCounts.guruPiket} Piket)`, color: '#2563EB' },
+          { label: 'Akun Wali Murid', value: roleCounts.waliMurid, color: '#059669' },
         ].map((item) => (
           <div key={item.label} style={{ ...cardStyle, padding: 'var(--space-5)' }}>
             <div style={{ fontSize: 'var(--font-size-xs)', color: 'var(--color-text-muted)', fontWeight: 600, marginBottom: '8px' }}>
               {item.label}
             </div>
-            <div style={{ fontSize: 'var(--font-size-2xl)', fontWeight: 800, color: item.color, fontVariantNumeric: 'tabular-nums' }}>
+            <div style={{ fontSize: 'var(--font-size-xl)', fontWeight: 800, color: item.color, fontVariantNumeric: 'tabular-nums' }}>
               {isLoading ? '—' : item.value}
             </div>
           </div>
@@ -301,7 +312,15 @@ export default function ManajemenAkunPage() {
                         @{account.username}
                       </td>
                       <td style={{ padding: '14px 16px' }}>
-                        <Badge variant={roleMeta.variant}>{roleMeta.label}</Badge>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', alignItems: 'center' }}>
+                          <Badge variant={roleMeta.variant}>{roleMeta.label}</Badge>
+                          {account.role === 'guru' && account.isPiket && (
+                            <Badge variant="info">Guru Piket</Badge>
+                          )}
+                          {account.role === 'guru' && Array.isArray(account.homeroomClasses) && account.homeroomClasses.length > 0 && (
+                            <Badge variant="success">Wali Kelas</Badge>
+                          )}
+                        </div>
                       </td>
                       <td style={{ padding: '14px 16px', color: 'var(--color-text-secondary)', fontSize: 'var(--font-size-xs)' }}>
                         {getLinkedLabel(account)}
@@ -393,30 +412,58 @@ export default function ManajemenAkunPage() {
           </div>
 
           {formData.role === USER_ROLES.GURU && (
-            <div>
-              <label style={labelStyle}>Hubungkan ke Data Guru (Opsional)</label>
-              <select
-                value={formData.teacherId}
-                onChange={(e) => setFormData({ ...formData, teacherId: e.target.value })}
-                style={inputStyle}
-              >
-                <option value="">— Tidak dihubungkan —</option>
-                {teachers.map(t => (
-                  <option key={t.id} value={t.id}>{t.name} ({t.nip || 'Non-NIP'})</option>
-                ))}
-              </select>
-            </div>
+            <>
+              <div>
+                <label style={labelStyle}>Hubungkan ke Data Guru (Wali Kelas otomatis terdeteksi)</label>
+                <select
+                  value={formData.teacherId}
+                  onChange={(e) => setFormData({ ...formData, teacherId: e.target.value })}
+                  style={inputStyle}
+                >
+                  <option value="">— Tidak dihubungkan —</option>
+                  {teachers.map(t => (
+                    <option key={t.id} value={t.id}>{t.name} ({t.nip || 'Non-NIP'})</option>
+                  ))}
+                </select>
+              </div>
+              <label style={{
+                display: 'flex',
+                alignItems: 'flex-start',
+                gap: '10px',
+                padding: '12px 14px',
+                borderRadius: 'var(--radius-lg)',
+                border: '1px solid var(--color-border)',
+                background: formData.isPiket ? '#EFF6FF' : 'var(--color-bg)',
+                cursor: 'pointer',
+              }}>
+                <input
+                  type="checkbox"
+                  checked={Boolean(formData.isPiket)}
+                  onChange={(e) => setFormData({ ...formData, isPiket: e.target.checked })}
+                  style={{ marginTop: '3px', width: '16px', height: '16px', accentColor: '#2563EB' }}
+                />
+                <span>
+                  <strong style={{ display: 'block', fontSize: 'var(--font-size-sm)', color: 'var(--color-text)' }}>
+                    Tugas Khusus: Guru Piket
+                  </strong>
+                  <span style={{ fontSize: 'var(--font-size-xs)', color: 'var(--color-text-secondary)', lineHeight: 1.4, display: 'block', marginTop: '2px' }}>
+                    Aktifkan agar guru ini dapat menginput absensi piket pagi/sore siswa. Tanpa centang ini, guru hanya dapat menginput absen mapel.
+                  </span>
+                </span>
+              </label>
+            </>
           )}
 
           {formData.role === USER_ROLES.WALI_MURID && (
             <div>
-              <label style={labelStyle}>Hubungkan ke Data Siswa (Opsional)</label>
+              <label style={labelStyle}>Hubungkan ke Data Siswa * (Wajib untuk akses monitoring anak)</label>
               <select
+                required
                 value={formData.studentId}
                 onChange={(e) => setFormData({ ...formData, studentId: e.target.value })}
                 style={inputStyle}
               >
-                <option value="">— Tidak dihubungkan —</option>
+                <option value="">— Pilih siswa yang dipantau —</option>
                 {students.map(s => (
                   <option key={s.id} value={s.id}>{s.name} ({s.class})</option>
                 ))}

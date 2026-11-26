@@ -74,7 +74,8 @@ export default function MonitoringMapelPage() {
   const { data: monitoring, isLoading, isFetching, refetch } = useQuery({
     queryKey: ['monitoring-kelas', selectedDay, selectedJam, selectedDate],
     queryFn: () => getMonitoringClasses({ day: selectedDay, jamKe: selectedJam, date: selectedDate }),
-    refetchInterval: 10000,
+    refetchInterval: 30000,
+    refetchIntervalInBackground: false,
   });
 
   const items = monitoring?.items || [];

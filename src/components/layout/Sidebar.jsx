@@ -111,12 +111,12 @@ function SvgIcon({ name }) {
 }
 
 export default function Sidebar({ isOpen, onClose }) {
-  const { user, logout, hasRole } = useAuth();
+  const { user, logout, hasRole, hasCapability } = useAuth();
   const navigate = useNavigate();
 
-  /* Filter menu berdasarkan role user */
+  /* Filter menu berdasarkan role & kapabilitas tugas user */
   const visibleMenuItems = DASHBOARD_NAV_ITEMS.filter(item =>
-    hasRole(item.roles)
+    hasRole(item.roles) && (!item.requiredCapability || hasCapability(item.requiredCapability))
   );
 
   /* Group menu items */
@@ -127,9 +127,9 @@ export default function Sidebar({ isOpen, onClose }) {
     groupedItems[group].push(item);
   });
 
-  const handleLogout = () => {
-    logout();
-    navigate('/login');
+  const handleLogout = async () => {
+    await logout();
+    navigate('/login', { replace: true });
   };
 
   const sidebarStyle = {

@@ -9,6 +9,7 @@ import { useState } from 'react';
 import { Link, NavLink, useNavigate } from 'react-router-dom';
 import { SCHOOL_INFO, PUBLIC_NAV_ITEMS } from '../../config/constants';
 import { useAuth } from '../../hooks/useAuth';
+import { getResumePathForUser } from '../../utils/sessionRouting';
 import Button from '../ui/Button';
 import SmkLogoEmblem from '../shared/SmkLogoEmblem';
 
@@ -18,14 +19,14 @@ export default function Navbar() {
   const navigate = useNavigate();
 
   const getPortalDestination = () => {
-    if (!isAuthenticated) return '/login';
-    if (user?.role === 'admin') return '/dashboard/ringkasan';
-    return '/app/home';
+    if (!isAuthenticated || !user) return '/login';
+    return getResumePathForUser(user);
   };
 
   const getPortalLabel = () => {
     if (!isAuthenticated) return '🔑 Login SIA';
-    if (user?.role === 'admin') return '⚙️ Dashboard';
+    if (user?.role === 'admin') return '⚙️ Dashboard Admin';
+    if (user?.role === 'wali_murid') return '👨‍👩‍👧 Portal Wali';
     return '📱 Portal Guru';
   };
 

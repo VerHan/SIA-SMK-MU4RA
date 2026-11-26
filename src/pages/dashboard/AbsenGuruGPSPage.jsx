@@ -79,20 +79,10 @@ export default function AbsenGuruGPSPage() {
       },
       (err) => {
         console.warn('GPS Error:', err.message);
-        /* Fallback demo mode */
-        const mockLat = schoolGeofence.latitude + 0.0001; 
-        const mockLng = schoolGeofence.longitude + 0.0001;
-        setCoords({ lat: mockLat, lng: mockLng });
-
-        const dist = calculateHaversineDistance(
-          mockLat,
-          mockLng,
-          schoolGeofence.latitude,
-          schoolGeofence.longitude
-        );
-        setDistance(dist);
-        setIsWithinGeofence(dist <= schoolGeofence.radiusMeters);
-        setGpsError('Lokasi GPS menggunakan mode simulasi (Izinkan akses lokasi browser untuk presisi aktual).');
+        setCoords(null);
+        setDistance(null);
+        setIsWithinGeofence(false);
+        setGpsError('Lokasi GPS tidak dapat dideteksi. Izinkan akses lokasi pada browser lalu klik "Refresh GPS" di area sekolah.');
         setLoadingGps(false);
       },
       { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
@@ -102,9 +92,13 @@ export default function AbsenGuruGPSPage() {
   useEffect(() => {
     fetchLocation();
     getTeacherAttendance().then(setHistory);
-  }, [schoolGeofence]);
+  }, [schoolGeofence?.latitude, schoolGeofence?.longitude, schoolGeofence?.radiusMeters]);
 
   const handleAttendance = async (type) => {
+    if (!coords) {
+      setToast({ type: 'error', message: 'Lokasi GPS belum terdeteksi. Klik "Refresh GPS" terlebih dahulu di area sekolah.' });
+      return;
+    }
     if (!isWithinGeofence) {
       setToast({ type: 'error', message: `Absen ditolak! Anda berada ${distance}m dari sekolah (Batas radius: ${schoolGeofence.radiusMeters}m).` });
       return;
@@ -115,14 +109,15 @@ export default function AbsenGuruGPSPage() {
       teacherName: user?.name || 'Guru SMK',
       teacherId: user?.teacherId || user?.id,
       type,
-      distanceMeters: distance,
-      isWithinGeofence,
-      coords,
+      coords: { latitude: coords.lat, longitude: coords.lng },
     });
     setSubmitting(false);
 
     if (res.success) {
       setToast({ type: 'success', message: res.message });
+      setCoords(null);
+      setDistance(null);
+      setIsWithinGeofence(false);
       getTeacherAttendance().then(setHistory);
     } else {
       setToast({ type: 'error', message: res.error });

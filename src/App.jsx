@@ -2,21 +2,26 @@
    App.jsx — Root Component & Pure SIA Router Configuration
    ============================================================ */
 
-import React, { Suspense, lazy } from 'react';
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import React, { Suspense, lazy, useEffect } from 'react';
+import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { AuthProvider } from './context/AuthContext';
 import { useAuth } from './hooks/useAuth';
+import { isStandalonePWA } from './hooks/usePWAInstall';
+import { getResumePathForUser, saveLastRoute } from './utils/sessionRouting';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
 import LoadingSpinner from './components/shared/LoadingSpinner';
 import ErrorBoundary from './components/shared/ErrorBoundary';
+import OfflineIndicator from './components/shared/OfflineIndicator';
 
-/* Inisialisasi React Query Client untuk Caching dan Auto-refresh */
+/* Inisialisasi React Query Client untuk Caching yang hemat bandwidth & beban server */
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
-      refetchOnWindowFocus: true, // otomatis refresh saat user buka tab ini lagi
-      staleTime: 60 * 1000, // cache dianggap usang setelah 1 menit
+      refetchOnWindowFocus: false, // cegah lonjakan request saat guru bolak-balik aplikasi di HP
+      staleTime: 60 * 1000, // cache dianggap segar selama 1 menit
+      gcTime: 10 * 60 * 1000, // simpan cache di memori selama 10 menit
+      retry: 1,
     },
   },
 });
@@ -93,31 +98,74 @@ const MobileSikapPage = safeLazy(() => import('./pages/mobile/MobileSikapPage'))
 const MobileNotifPage = safeLazy(() => import('./pages/mobile/MobileNotifPage'));
 const MobileProfilPage = safeLazy(() => import('./pages/mobile/MobileProfilPage'));
 const MobileSettingsPage = safeLazy(() => import('./pages/mobile/MobileSettingsPage'));
-
-/* Role yang menggunakan tampilan Mobile PWA */
-const MOBILE_ROLES = ['guru', 'staff', 'kepsek'];
+const MobileGuardianPage = safeLazy(() => import('./pages/mobile/MobileGuardianPage'));
+const MobileAbsenPiketPage = safeLazy(() => import('./pages/mobile/MobileAbsenPiketPage'));
+const MobileWaliKelasPage = safeLazy(() => import('./pages/mobile/MobileWaliKelasPage'));
 
 /**
- * RootRedirect — Mengarahkan pengguna berdasarkan role saat buka /portal atau /dashboard
+ * LastRouteTracker — Menyimpan halaman SIA terakhir yang dibuka (preferensi navigasi saja)
+ * agar saat aplikasi/PWA dibuka kembali langsung melanjutkan ke ruang kerja SIA.
+ */
+function LastRouteTracker() {
+  const { isAuthenticated, user } = useAuth();
+  const location = useLocation();
+
+  useEffect(() => {
+    if (!isAuthenticated || !user) return;
+    saveLastRoute(location.pathname, user);
+  }, [isAuthenticated, user, location.pathname]);
+
+  return null;
+}
+
+/**
+ * PublicHomeGate — Memeriksa sesi/JWT pengguna saat membuka halaman utama (/).
+ * - Jika sesi login aktif: langsung diarahkan ke tampilan SIA terakhir / dashboard sesuai role
+ *   (tanpa kilasan halaman profil), kecuali pengguna sengaja memilih "?view=public".
+ * - Jika dibuka dari ikon PWA ter-install tanpa sesi: langsung ke /login.
+ * - Jika pengunjung luar (belum login) di browser biasa: tampilkan Web Profil Sekolah.
+ */
+function PublicHomeGate() {
+  const { isAuthenticated, isLoading, user } = useAuth();
+  const location = useLocation();
+  const params = new URLSearchParams(location.search);
+  const wantsPublicPreview = params.get('view') === 'public';
+
+  if (!wantsPublicPreview) {
+    if (isLoading) {
+      return (
+        <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <LoadingSpinner message="Memeriksa sesi SIA..." />
+        </div>
+      );
+    }
+
+    if (isAuthenticated && user) {
+      return <Navigate to={getResumePathForUser(user)} replace />;
+    }
+
+    if (isStandalonePWA()) {
+      return <Navigate to="/login" replace />;
+    }
+  }
+
+  return (
+    <PublicLayout>
+      <HomePage />
+    </PublicLayout>
+  );
+}
+
+/**
+ * RootRedirect — Mengarahkan pengguna berdasarkan sesi & role saat buka /app atau /dashboard
  */
 function RootRedirect() {
   const { isAuthenticated, isLoading, user } = useAuth();
 
-  if (isLoading) return null;
+  if (isLoading) return <LoadingSpinner message="Memuat ruang kerja SIA..." />;
   if (!isAuthenticated) return <Navigate to="/login" replace />;
 
-  /* Admin → Dashboard desktop */
-  if (user?.role === 'admin') {
-    return <Navigate to="/dashboard/ringkasan" replace />;
-  }
-
-  /* Guru / Staff / Kepsek → Mobile PWA */
-  if (MOBILE_ROLES.includes(user?.role)) {
-    return <Navigate to="/app/home" replace />;
-  }
-
-  /* Default fallback */
-  return <Navigate to="/app/home" replace />;
+  return <Navigate to={getResumePathForUser(user)} replace />;
 }
 
 export default function App() {
@@ -126,11 +174,15 @@ export default function App() {
       <QueryClientProvider client={queryClient}>
         <AuthProvider>
           <BrowserRouter>
+            <LastRouteTracker />
+            <OfflineIndicator />
             <Suspense fallback={<LoadingSpinner />}>
               <Routes>
-                {/* ── PUBLIC WEBSITE ROUTES (/) ── */}
+                {/* ── ROOT ENTRY GATE (/) — Auto-resume sesi SIA tanpa kilasan halaman profil ── */}
+                <Route path="/" element={<PublicHomeGate />} />
+
+                {/* ── PUBLIC WEBSITE ROUTES ── */}
                 <Route element={<PublicLayout />}>
-                  <Route path="/" element={<HomePage />} />
                   <Route path="/profil" element={<ProfilPage />} />
                   <Route path="/kejuruan" element={<KejuruanPage />} />
                   <Route path="/berita" element={<BeritaPage />} />
@@ -142,21 +194,29 @@ export default function App() {
                 <Route path="/login" element={<LoginPage />} />
 
 
-                {/* ── MOBILE CLIENT ROUTES (/app/*) ── */}
+                {/* ── MOBILE CLIENT ROUTES (/app/*) — Khusus Guru, Staff, Kepsek & Wali Murid (Admin diarahkan ke /dashboard) ── */}
                 <Route
                   element={
                     <ProtectedRoute>
-                      <MobileLayout />
+                      <RoleGuard
+                        allowedRoles={['guru', 'staff', 'kepsek', 'wali_murid']}
+                        fallback={<Navigate to="/dashboard/ringkasan" replace />}
+                      >
+                        <MobileLayout />
+                      </RoleGuard>
                     </ProtectedRoute>
                   }
                 >
-                  <Route path="/app" element={<Navigate to="/app/home" replace />} />
-                  <Route path="/app/home" element={<MobileHomePage />} />
-                  <Route path="/app/absen-gps" element={<MobileAbsenGPSPage />} />
-                  <Route path="/app/absen-mapel" element={<MobileAbsenMapelPage />} />
-                  <Route path="/app/jadwal" element={<MobileJadwalPage />} />
-                  <Route path="/app/nilai" element={<MobileNilaiPage />} />
-                  <Route path="/app/sikap" element={<MobileSikapPage />} />
+                  <Route path="/app" element={<RootRedirect />} />
+                  <Route path="/app/home" element={<RoleGuard allowedRoles={['admin', 'guru', 'staff', 'kepsek']} fallback={<Navigate to="/app/monitoring-anak" replace />}><MobileHomePage /></RoleGuard>} />
+                  <Route path="/app/absen-gps" element={<RoleGuard allowedRoles={['admin', 'guru', 'staff', 'kepsek']} fallback={<Navigate to="/app/monitoring-anak" replace />}><MobileAbsenGPSPage /></RoleGuard>} />
+                  <Route path="/app/absen-mapel" element={<RoleGuard allowedRoles={['admin', 'guru']}><MobileAbsenMapelPage /></RoleGuard>} />
+                  <Route path="/app/absen-piket" element={<RoleGuard requiredCapability="canInputPiket"><MobileAbsenPiketPage /></RoleGuard>} />
+                  <Route path="/app/wali-kelas" element={<RoleGuard requiredCapability="canMonitorHomeroom"><MobileWaliKelasPage /></RoleGuard>} />
+                  <Route path="/app/monitoring-anak" element={<RoleGuard allowedRoles={['wali_murid', 'admin']}><MobileGuardianPage /></RoleGuard>} />
+                  <Route path="/app/jadwal" element={<RoleGuard allowedRoles={['admin', 'guru', 'staff', 'kepsek']} fallback={<Navigate to="/app/monitoring-anak" replace />}><MobileJadwalPage /></RoleGuard>} />
+                  <Route path="/app/nilai" element={<RoleGuard allowedRoles={['admin', 'guru', 'kepsek']}><MobileNilaiPage /></RoleGuard>} />
+                  <Route path="/app/sikap" element={<RoleGuard allowedRoles={['admin', 'guru', 'kepsek']}><MobileSikapPage /></RoleGuard>} />
                   <Route path="/app/notif" element={<MobileNotifPage />} />
                   <Route path="/app/profil" element={<MobileProfilPage />} />
                   <Route path="/app/settings" element={<MobileSettingsPage />} />
@@ -166,7 +226,9 @@ export default function App() {
                 <Route
                   element={
                     <ProtectedRoute>
-                      <DashboardLayout />
+                      <RoleGuard allowedRoles={['admin', 'guru', 'staff', 'kepsek']} fallback={<Navigate to="/app/monitoring-anak" replace />}>
+                        <DashboardLayout />
+                      </RoleGuard>
                     </ProtectedRoute>
                   }
                 >
@@ -194,8 +256,8 @@ export default function App() {
                   
                   {/* Guru Tools */}
                   <Route path="/dashboard/absen-guru" element={<AbsenGuruGPSPage />} />
-                  <Route path="/dashboard/guru-absen-piket" element={<GuruAbsenPiketPage />} />
-                  <Route path="/dashboard/guru-absen-mapel" element={<GuruAbsenMapelPage />} />
+                  <Route path="/dashboard/guru-absen-piket" element={<RoleGuard requiredCapability="canInputPiket"><GuruAbsenPiketPage /></RoleGuard>} />
+                  <Route path="/dashboard/guru-absen-mapel" element={<RoleGuard allowedRoles={['admin', 'guru']}><GuruAbsenMapelPage /></RoleGuard>} />
                   
                   {/* Publikasi & PPDB */}
                   <Route path="/dashboard/berita" element={<RoleGuard allowedRoles={['admin', 'staff']}><ManajemenBeritaPage /></RoleGuard>} />

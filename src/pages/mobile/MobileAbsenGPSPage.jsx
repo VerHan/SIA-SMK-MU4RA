@@ -11,6 +11,7 @@ import {
   getTeacherAttendance,
   getCachedAttendance,
   setCachedAttendance,
+  removeCachedAttendance,
   getJakartaToday,
 } from '../../services/api';
 import { SCHOOL_GEOFENCE } from '../../config/constants';
@@ -122,9 +123,12 @@ export default function MobileAbsenGPSPage() {
     if (cached) setTodayRecord(cached);
 
     // Fetch server revalidation di background
-    getTeacherAttendance(today, user.name).then(data => {
+    getTeacherAttendance(today, user.name, user.teacherId).then(data => {
       const rec = Array.isArray(data)
-        ? data.find(r => (r.teacherName === user.name || r.guruName === user.name) && (r.date === today || r.tanggal === today))
+        ? data.find(r =>
+            ((user.teacherId && r.teacherId === user.teacherId) || r.teacherName === user.name || r.guruName === user.name) &&
+            (r.date === today || r.tanggal === today)
+          )
         : (data?.teacherName === user.name ? data : null);
       if (rec) {
         setTodayRecord(rec);
@@ -142,7 +146,15 @@ export default function MobileAbsenGPSPage() {
     };
     window.addEventListener('sia-attendance-updated', handleUpdate);
     return () => window.removeEventListener('sia-attendance-updated', handleUpdate);
-  }, [user?.name, today]);
+  }, [user?.name, user?.teacherId, today]);
+
+  /* Hitung ulang jarak jika konfigurasi geofence dari server baru selesai dimuat */
+  useEffect(() => {
+    if (coords && schoolGeofence) {
+      const dist = Math.round(calcDistance(coords.latitude, coords.longitude, schoolGeofence.latitude, schoolGeofence.longitude));
+      setDistance(dist);
+    }
+  }, [coords, schoolGeofence?.latitude, schoolGeofence?.longitude]);
 
   const getLocation = () => {
     /* Cek apakah browser mendukung Geolocation API */
@@ -232,14 +244,21 @@ export default function MobileAbsenGPSPage() {
     setSubmitting(true);
     setMessage({ type: 'success', text: `Menyimpan presensi ${type === 'in' ? 'masuk' : 'pulang'}...` });
 
-    // 2. Kirim ke database di background
+    const rollbackOptimistic = () => {
+      setTodayRecord(previousRecord || null);
+      if (previousRecord) {
+        setCachedAttendance(user?.name, today, previousRecord);
+      } else {
+        removeCachedAttendance(user?.name, today);
+      }
+    };
+
+    // 2. Kirim ke database dan tunggu konfirmasi server (tidak ada sukses palsu saat offline)
     try {
       const res = await submitTeacherAttendance({
         teacherName: user?.name,
         teacherId: user?.teacherId || user?.id,
         type,
-        distanceMeters: distance,
-        isWithinGeofence: isWithin,
         coords,
       });
 
@@ -249,19 +268,25 @@ export default function MobileAbsenGPSPage() {
           setTodayRecord(res.record);
           setCachedAttendance(user?.name, today, res.record);
         }
+        /* Reset koordinat setelah absen berhasil agar sesi pulang wajib deteksi ulang di area sekolah */
+        setCoords(null);
+        setDistance(null);
       } else {
         if (res.record) {
           setTodayRecord(res.record);
           setCachedAttendance(user?.name, today, res.record);
         } else {
-          setTodayRecord(previousRecord);
-          setCachedAttendance(user?.name, today, previousRecord);
+          rollbackOptimistic();
         }
         setMessage({ type: 'error', text: res.error || 'Gagal menyimpan presensi.' });
       }
     } catch (err) {
-      console.warn('Submit attendance network fallback:', err);
-      setMessage({ type: 'success', text: 'Presensi tersimpan lokal dan akan disinkronkan ke server.' });
+      console.warn('Submit attendance error:', err);
+      rollbackOptimistic();
+      setMessage({
+        type: 'error',
+        text: 'Gagal terhubung ke server. Presensi belum tersimpan — periksa koneksi internet lalu tekan tombol Absen lagi.',
+      });
     } finally {
       setSubmitting(false);
     }

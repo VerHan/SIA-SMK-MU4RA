@@ -30,6 +30,7 @@ model TahunAjar {
   jadwal        Jadwal[]
   absensi       Absensi[]
   absensiSholat AbsensiSholat[]
+  absensiGuru   AbsensiGuru[]
   poinSikap     PoinSikap[]
   pembayaran    Pembayaran[]
   nilai         Nilai[]
@@ -42,14 +43,22 @@ model User {
   password  String
   name      String
   role      String   // admin, guru, staff, wali_murid, kepsek
+  isPiket   Boolean  @default(false) // Hak akses khusus Guru Piket (hanya berlaku untuk role guru)
   teacherId String?  // Link ke Guru (opsional, hanya untuk role guru)
   studentId String?  // Link ke Siswa (opsional, hanya untuk role siswa/wali_murid)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   // Relations
-  guru      Guru?    @relation(fields: [teacherId], references: [id])
-  siswa     Siswa?   @relation(fields: [studentId], references: [id])
+  guru                  Guru?           @relation(fields: [teacherId], references: [id], onDelete: SetNull)
+  siswa                 Siswa?          @relation(fields: [studentId], references: [id], onDelete: SetNull)
+  recordedAbsensi       Absensi[]       @relation("AbsensiRecordedByUser")
+  recordedAbsensiSholat AbsensiSholat[] @relation("AbsensiSholatRecordedByUser")
+  recordedAbsensiMapel  AbsensiMapel[]  @relation("AbsensiMapelRecordedByUser")
+  recordedAbsensiGuru   AbsensiGuru[]   @relation("AbsensiGuruRecordedByUser")
+
+  @@index([teacherId])
+  @@index([studentId])
 }
 
 model Guru {
@@ -63,11 +72,13 @@ model Guru {
   updatedAt   DateTime @updatedAt
   
   // Relations
-  jadwal       Jadwal[]
-  kelasWali    Kelas[]       @relation("WaliKelas")
-  absensiGuru  AbsensiGuru[]
-  absensiMapel AbsensiMapel[]
-  users        User[]
+  jadwal                Jadwal[]
+  kelasWali             Kelas[]         @relation("WaliKelas")
+  absensiGuru           AbsensiGuru[]
+  absensiMapel          AbsensiMapel[]
+  recordedAbsensi       Absensi[]       @relation("AbsensiRecordedByGuru")
+  recordedAbsensiSholat AbsensiSholat[] @relation("AbsensiSholatRecordedByGuru")
+  users                 User[]
 }
 
 model Siswa {
@@ -75,6 +86,7 @@ model Siswa {
   nomor          String?  @unique
   name           String
   gender         String   @default("L")
+  status         String   @default("aktif") // aktif, lulus, pindah, nonaktif
   phone          String?
   phone_parent   String?
   pekerjaan_ortu String?
@@ -92,6 +104,8 @@ model Siswa {
   nilai          Nilai[]
   absensiMapel   AbsensiMapel[]
   users          User[]
+
+  @@index([status])
 }
 
 model Kelas {
@@ -105,8 +119,14 @@ model Kelas {
   updatedAt     DateTime @updatedAt
   
   // Relations
-  waliKelas     Guru?          @relation("WaliKelas", fields: [teacherId], references: [id])
+  waliKelas     Guru?           @relation("WaliKelas", fields: [teacherId], references: [id], onDelete: SetNull)
   riwayatKelas  RiwayatKelas[]
+  jadwal        Jadwal[]
+  absensi       Absensi[]
+  absensiSholat AbsensiSholat[]
+  absensiMapel  AbsensiMapel[]
+
+  @@index([teacherId])
 }
 
 model Jurusan {
@@ -168,11 +188,12 @@ model RiwayatKelas {
   createdAt   DateTime @default(now())
 
   // Relations
-  siswa       Siswa     @relation(fields: [siswaId], references: [id])
-  kelas       Kelas     @relation(fields: [kelasId], references: [id])
-  tahunAjar   TahunAjar @relation(fields: [tahunAjarId], references: [id])
+  siswa       Siswa     @relation(fields: [siswaId], references: [id], onDelete: Cascade)
+  kelas       Kelas     @relation(fields: [kelasId], references: [id], onDelete: Restrict)
+  tahunAjar   TahunAjar @relation(fields: [tahunAjarId], references: [id], onDelete: Cascade)
 
   @@unique([siswaId, tahunAjarId]) // 1 Siswa hanya punya 1 kelas per tahun ajar
+  @@index([kelasId, tahunAjarId])
 }
 
 model Nilai {
@@ -186,9 +207,11 @@ model Nilai {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  siswa       Siswa         @relation(fields: [siswaId], references: [id])
-  mapel       MataPelajaran @relation(fields: [mapelId], references: [id])
-  tahunAjar   TahunAjar     @relation(fields: [tahunAjarId], references: [id])
+  siswa       Siswa         @relation(fields: [siswaId], references: [id], onDelete: Cascade)
+  mapel       MataPelajaran @relation(fields: [mapelId], references: [id], onDelete: Cascade)
+  tahunAjar   TahunAjar     @relation(fields: [tahunAjarId], references: [id], onDelete: Cascade)
+
+  @@index([siswaId, tahunAjarId])
 }
 
 model Jadwal {
@@ -198,41 +221,71 @@ model Jadwal {
   jamKe       Int?
   subjectId   String
   teacherId   String
+  kelasId     String?
   className   String   // Nama kelas untuk display cepat
   room        String?
   tahunAjarId String?
 
-  subject     MataPelajaran @relation(fields: [subjectId], references: [id])
-  teacher     Guru          @relation(fields: [teacherId], references: [id])
-  tahunAjar   TahunAjar?    @relation(fields: [tahunAjarId], references: [id])
+  subject     MataPelajaran @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  teacher     Guru          @relation(fields: [teacherId], references: [id], onDelete: Cascade)
+  kelas       Kelas?        @relation(fields: [kelasId], references: [id], onDelete: SetNull)
+  tahunAjar   TahunAjar?    @relation(fields: [tahunAjarId], references: [id], onDelete: SetNull)
+
+  @@index([day, jamKe])
+  @@index([className, day])
+  @@index([kelasId, day])
+  @@index([teacherId])
+  @@index([subjectId])
 }
 
 model Absensi {
-  id          String   @id @default(uuid())
-  studentId   String
-  tahunAjarId String?
-  date        DateTime @db.Date
-  statusPagi  String?
-  statusSore  String?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id               String   @id @default(uuid())
+  studentId        String
+  kelasId          String?
+  tahunAjarId      String?
+  recordedByUserId String?
+  recordedByGuruId String?
+  date             DateTime @db.Date
+  statusPagi       String?
+  statusSore       String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
   
-  student     Siswa      @relation(fields: [studentId], references: [id])
-  tahunAjar   TahunAjar? @relation(fields: [tahunAjarId], references: [id])
+  student        Siswa      @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  kelas          Kelas?     @relation(fields: [kelasId], references: [id], onDelete: SetNull)
+  tahunAjar      TahunAjar? @relation(fields: [tahunAjarId], references: [id], onDelete: SetNull)
+  recordedByUser User?      @relation("AbsensiRecordedByUser", fields: [recordedByUserId], references: [id], onDelete: SetNull)
+  recordedByGuru Guru?      @relation("AbsensiRecordedByGuru", fields: [recordedByGuruId], references: [id], onDelete: SetNull)
+
+  @@unique([studentId, date])
+  @@index([date])
+  @@index([kelasId, date])
+  @@index([recordedByUserId])
+  @@index([recordedByGuruId])
 }
 
 model AbsensiSholat {
-  id          String   @id @default(uuid())
-  studentId   String
-  tahunAjarId String?
-  date        DateTime @db.Date
-  dzuhur      Boolean  @default(false)
-  ashar       Boolean  @default(false)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id               String   @id @default(uuid())
+  studentId        String
+  kelasId          String?
+  tahunAjarId      String?
+  recordedByUserId String?
+  recordedByGuruId String?
+  date             DateTime @db.Date
+  dzuhur           Boolean  @default(false)
+  ashar            Boolean  @default(false)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
 
-  student     Siswa      @relation("AbsensiSholatSiswa", fields: [studentId], references: [id])
-  tahunAjar   TahunAjar? @relation(fields: [tahunAjarId], references: [id])
+  student        Siswa      @relation("AbsensiSholatSiswa", fields: [studentId], references: [id], onDelete: Cascade)
+  kelas          Kelas?     @relation(fields: [kelasId], references: [id], onDelete: SetNull)
+  tahunAjar      TahunAjar? @relation(fields: [tahunAjarId], references: [id], onDelete: SetNull)
+  recordedByUser User?      @relation("AbsensiSholatRecordedByUser", fields: [recordedByUserId], references: [id], onDelete: SetNull)
+  recordedByGuru Guru?      @relation("AbsensiSholatRecordedByGuru", fields: [recordedByGuruId], references: [id], onDelete: SetNull)
+
+  @@unique([studentId, date])
+  @@index([date])
+  @@index([kelasId, date])
 }
 
 model PoinSikap {
@@ -246,9 +299,11 @@ model PoinSikap {
   pencatat     String?
   createdAt    DateTime @default(now())
 
-  siswa        Siswa      @relation("PoinSikapSiswa", fields: [siswaId], references: [id])
-  aturanPoin   AturanPoin @relation(fields: [aturanPoinId], references: [id])
-  tahunAjar    TahunAjar? @relation(fields: [tahunAjarId], references: [id])
+  siswa        Siswa      @relation("PoinSikapSiswa", fields: [siswaId], references: [id], onDelete: Cascade)
+  aturanPoin   AturanPoin @relation(fields: [aturanPoinId], references: [id], onDelete: Cascade)
+  tahunAjar    TahunAjar? @relation(fields: [tahunAjarId], references: [id], onDelete: SetNull)
+
+  @@index([siswaId, tanggal])
 }
 
 model Pembayaran {
@@ -264,8 +319,8 @@ model Pembayaran {
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
 
-  student     Siswa      @relation("PembayaranSiswa", fields: [studentId], references: [id])
-  tahunAjar   TahunAjar? @relation(fields: [tahunAjarId], references: [id])
+  student     Siswa      @relation("PembayaranSiswa", fields: [studentId], references: [id], onDelete: Cascade)
+  tahunAjar   TahunAjar? @relation(fields: [tahunAjarId], references: [id], onDelete: SetNull)
 }
 
 // -------------------------------------------------------------
@@ -273,22 +328,27 @@ model Pembayaran {
 // -------------------------------------------------------------
 
 model AbsensiGuru {
-  id          String   @id @default(uuid())
-  guruId      String
-  tanggal     DateTime @db.Date
-  status      String   // hadir, izin, sakit, alpha
-  sumber      String   // gps, manual
-  jamMasuk    String?
-  jamPulang   String?
-  jarakMeter  Int?
-  keterangan  String?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id               String   @id @default(uuid())
+  guruId           String
+  tahunAjarId      String?
+  recordedByUserId String?
+  tanggal          DateTime @db.Date
+  status           String   // hadir, izin, sakit, alpha
+  sumber           String   // gps, manual
+  jamMasuk         String?
+  jamPulang        String?
+  jarakMeter       Int?
+  keterangan       String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
 
-  guru        Guru     @relation(fields: [guruId], references: [id])
+  guru           Guru       @relation(fields: [guruId], references: [id], onDelete: Restrict)
+  tahunAjar      TahunAjar? @relation(fields: [tahunAjarId], references: [id], onDelete: SetNull)
+  recordedByUser User?      @relation("AbsensiGuruRecordedByUser", fields: [recordedByUserId], references: [id], onDelete: SetNull)
 
-  @@index([guruId, tanggal])
+  @@unique([guruId, tanggal])
   @@index([tanggal])
+  @@index([recordedByUserId])
 }
 
 model LogAktivitas {
@@ -298,6 +358,8 @@ model LogAktivitas {
   action    String
   detail    String?
   createdAt DateTime @default(now())
+
+  @@index([createdAt])
 }
 
 model SystemHeartbeat {
@@ -306,6 +368,8 @@ model SystemHeartbeat {
   triggeredBy String   // nama user admin atau 'CRON_WORKER'
   createdAt   DateTime @default(now())
   note        String?
+
+  @@index([createdAt])
 }
 
 model KelompokMapel {
@@ -316,24 +380,33 @@ model KelompokMapel {
 }
 
 model AbsensiMapel {
-  id          String   @id @default(uuid())
-  studentId   String
-  mapelId     String
-  guruId      String
-  kelasName   String   // Nama kelas untuk query cepat
-  tahunAjarId String?
-  date        DateTime @db.Date
-  jamKe       Int      // Jam pelajaran ke berapa
-  status      String   // hadir, izin, sakit, alpha
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id               String   @id @default(uuid())
+  studentId        String
+  mapelId          String
+  guruId           String
+  kelasId          String?
+  recordedByUserId String?
+  kelasName        String   // Nama kelas untuk display cepat
+  tahunAjarId      String?
+  date             DateTime @db.Date
+  jamKe            Int      // Jam pelajaran ke berapa
+  status           String   // hadir, izin, sakit, alpha
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
 
-  student     Siswa         @relation(fields: [studentId], references: [id])
-  mapel       MataPelajaran @relation(fields: [mapelId], references: [id])
-  guru        Guru          @relation(fields: [guruId], references: [id])
-  tahunAjar   TahunAjar?    @relation(fields: [tahunAjarId], references: [id])
+  student        Siswa         @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  mapel          MataPelajaran @relation(fields: [mapelId], references: [id], onDelete: Restrict)
+  guru           Guru          @relation(fields: [guruId], references: [id], onDelete: Restrict)
+  kelas          Kelas?        @relation(fields: [kelasId], references: [id], onDelete: SetNull)
+  tahunAjar      TahunAjar?    @relation(fields: [tahunAjarId], references: [id], onDelete: SetNull)
+  recordedByUser User?         @relation("AbsensiMapelRecordedByUser", fields: [recordedByUserId], references: [id], onDelete: SetNull)
 
   @@unique([studentId, mapelId, date, jamKe])
+  @@index([kelasName, date])
+  @@index([kelasId, date])
+  @@index([studentId, date])
+  @@index([guruId, date])
+  @@index([date, jamKe])
 }
 
 model MasterSesi {

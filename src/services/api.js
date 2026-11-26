@@ -14,15 +14,18 @@ import {
 } from './mockData';
 import { generateId } from '../utils/helpers';
 import { getAuthHeaders, notifyAuthExpired } from './authToken';
-import { setCachedAttendance, getJakartaToday } from './attendanceCache';
-export { getCachedAttendance, setCachedAttendance, getJakartaToday } from './attendanceCache';
+import { setCachedAttendance, removeCachedAttendance, getJakartaToday } from './attendanceCache';
+export { getCachedAttendance, setCachedAttendance, removeCachedAttendance, getJakartaToday } from './attendanceCache';
 
 /* ============================================================
    SHARED FETCH HELPER (Bearer Token + JSON Parsing + 401 Handler)
    ============================================================ */
 async function apiFetch(url, options = {}) {
   const { headers = {}, body, skipAuthExpiry = false, ...rest } = options;
-  const finalHeaders = getAuthHeaders(headers);
+  const finalHeaders = getAuthHeaders({
+    'X-Requested-With': 'XMLHttpRequest',
+    ...headers,
+  });
 
   let finalBody = body;
   if (body !== undefined && typeof body !== 'string' && !(body instanceof FormData)) {
@@ -31,6 +34,7 @@ async function apiFetch(url, options = {}) {
   }
 
   const res = await fetch(url, {
+    credentials: 'include',
     ...rest,
     headers: finalHeaders,
     body: finalBody,
@@ -53,6 +57,9 @@ function formatMutationResponse(res, fallbackError = 'Permintaan gagal diproses.
   }
   return {
     success: false,
+    status: res.status,
+    conflict: Boolean(res.data?.conflict || res.status === 409),
+    conflicts: res.data?.conflicts || [],
     error: res.data?.error || res.data?.message || (res.status === 401 ? 'Sesi habis. Silakan login ulang.' : res.status === 403 ? 'Anda tidak memiliki izin untuk aksi ini.' : fallbackError),
   };
 }
@@ -66,12 +73,12 @@ let studentAttitudeList = MOCK_STUDENT_ATTITUDE ? [...MOCK_STUDENT_ATTITUDE] : [
 /* ============================================================
    AUTH & MANAJEMEN AKUN USER
    ============================================================ */
-export async function loginUser(username, password) {
+export async function loginUser(username, password, rememberMe = true) {
   try {
     const res = await apiFetch('/api/auth/login', {
       method: 'POST',
       skipAuthExpiry: true,
-      body: { username: (username || '').trim(), password },
+      body: { username: (username || '').trim(), password, rememberMe: rememberMe !== false },
     });
     if (res.ok && res.data?.success && res.data.user) {
       return {
@@ -86,6 +93,17 @@ export async function loginUser(username, password) {
     };
   } catch {
     return { success: false, error: 'Gagal menghubungi server autentikasi.' };
+  }
+}
+
+export async function logoutUser() {
+  try {
+    await apiFetch('/api/auth/logout', {
+      method: 'POST',
+      skipAuthExpiry: true,
+    });
+  } catch {
+    /* Abaikan error jaringan saat logout lokal */
   }
 }
 
@@ -340,15 +358,33 @@ export async function deleteDutySchedule(id) {
 /* ============================================================
    STUDENTS (CRUD Master Data Siswa)
    ============================================================ */
-export async function getStudents(classFilter) {
+export async function getStudents(classFilter, options = {}) {
   try {
-    const url = classFilter ? `/api/siswa?kelas=${encodeURIComponent(classFilter)}` : '/api/siswa';
+    const params = new URLSearchParams();
+    if (classFilter) params.append('kelas', classFilter);
+    if (options.status) params.append('status', options.status);
+    if (options.includeInactive) params.append('includeInactive', 'true');
+    const qs = params.toString();
+    const url = `/api/siswa${qs ? `?${qs}` : ''}`;
     const res = await apiFetch(url);
     if (res.ok && Array.isArray(res.data)) return res.data;
   } catch (e) {
     console.error('Failed to get students:', e);
   }
   return [];
+}
+
+export async function getStudentAttendanceDetail(studentId, month) {
+  try {
+    const params = new URLSearchParams();
+    if (month && month !== 'all') params.append('month', month);
+    const qs = params.toString();
+    const res = await apiFetch(`/api/siswa/${encodeURIComponent(studentId)}/absensi${qs ? `?${qs}` : ''}`);
+    if (res.ok && res.data?.success) return res.data;
+  } catch (e) {
+    console.error('Failed to get student attendance detail:', e);
+  }
+  return null;
 }
 
 export async function addStudent(studentData) {
@@ -454,24 +490,58 @@ export async function getTeacherAttendance(dateFilter, teacherName, teacherId) {
   return [];
 }
 
-export async function submitTeacherAttendance({ teacherName, teacherId, type, distanceMeters, isWithinGeofence, coords }) {
+export async function getGeofenceSettings() {
   try {
+    const res = await apiFetch('/api/settings/geofence', { skipAuthExpiry: true });
+    if (res.ok && res.data?.success && res.data.data) {
+      return { success: true, data: res.data.data };
+    }
+    return { success: false };
+  } catch {
+    return { success: false };
+  }
+}
+
+export async function updateGeofenceSettings(geofence) {
+  try {
+    const res = await apiFetch('/api/settings/geofence', {
+      method: 'PUT',
+      body: geofence,
+    });
+    return formatMutationResponse(res, 'Gagal menyimpan pengaturan geofence.');
+  } catch {
+    return { success: false, error: 'Gagal menghubungi server.' };
+  }
+}
+
+export async function submitTeacherAttendance({ teacherName, teacherId, type, coords }) {
+  try {
+    const normalizedCoords = coords
+      ? {
+          latitude: coords.latitude ?? coords.lat,
+          longitude: coords.longitude ?? coords.lng,
+        }
+      : null;
     const res = await apiFetch('/api/guru/absen', {
       method: 'POST',
-      body: { teacherName, teacherId, type, distanceMeters, isWithinGeofence, coords },
+      body: { teacherName, teacherId, type, coords: normalizedCoords },
     });
     if (res.ok && res.data) {
       if (!res.data.success) {
         return { success: false, error: res.data.message || res.data.error, record: res.data.record };
       }
       if (res.data.record) {
-        setCachedAttendance(teacherName, res.data.record.date || getJakartaToday(), res.data.record);
+        setCachedAttendance(teacherName || res.data.record.teacherName, res.data.record.date || getJakartaToday(), res.data.record);
       }
       return { success: true, message: res.data.message, record: res.data.record };
     }
     return formatMutationResponse(res, 'Gagal mengirim absensi guru.');
   } catch {
-    return { success: false, error: 'Gagal menghubungi server.' };
+    return {
+      success: false,
+      networkError: true,
+      error: 'Gagal terhubung ke server. Presensi belum tersimpan — periksa koneksi lalu coba lagi.',
+    };
   }
 }
 
@@ -694,12 +764,42 @@ export async function getAttendance(classFilter, dateFilter, monthFilter) {
   return [];
 }
 
-export async function saveAttendance(records) {
+export async function saveAttendance(records, options = {}) {
   try {
-    const res = await apiFetch('/api/absensi', { method: 'POST', body: { records } });
+    const body = { records };
+    if (options.session) body.session = options.session;
+    if (options.force) body.force = true;
+    const res = await apiFetch('/api/absensi', { method: 'POST', body });
     return formatMutationResponse(res, 'Gagal menyimpan absensi piket.');
   } catch {
     return { success: false, error: 'Gagal menghubungi server.' };
+  }
+}
+
+export async function getGuardianOverview(month) {
+  try {
+    const params = new URLSearchParams();
+    if (month && month !== 'all') params.set('month', month);
+    const qs = params.toString();
+    const res = await apiFetch(`/api/guardian/overview${qs ? `?${qs}` : ''}`);
+    if (res.ok && res.data?.success) return res.data;
+    return { success: false, error: res.data?.error || 'Gagal memuat data kehadiran anak.' };
+  } catch {
+    return { success: false, error: 'Gagal menghubungi server.' };
+  }
+}
+
+export async function getHomeroomMonitoring(kelas, month) {
+  try {
+    const params = new URLSearchParams();
+    if (kelas) params.set('kelas', kelas);
+    if (month && month !== 'all') params.set('month', month);
+    const qs = params.toString();
+    const res = await apiFetch(`/api/monitoring/homeroom${qs ? `?${qs}` : ''}`);
+    if (res.ok && res.data?.success) return res.data;
+    return { success: false, error: res.data?.error || 'Gagal memuat monitoring kelas.', classes: [], students: [] };
+  } catch {
+    return { success: false, error: 'Gagal menghubungi server.', classes: [], students: [] };
   }
 }
 

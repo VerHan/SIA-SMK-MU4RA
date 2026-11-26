@@ -88,6 +88,31 @@ export function setCachedAttendance(teacherName, date, record) {
 }
 
 /**
+ * Hapus cache presensi tanggal tertentu (misal saat rollback error jaringan)
+ */
+export function removeCachedAttendance(teacherName, date) {
+  if (!teacherName) return;
+  const key = buildKey(teacherName, date);
+  memoryCache.delete(key);
+  try {
+    localStorage.removeItem(key);
+  } catch (err) {
+    console.warn('[attendanceCache] Error removing localStorage key:', err);
+  }
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(
+      new CustomEvent('sia-attendance-updated', {
+        detail: {
+          teacherName,
+          date: date || getJakartaToday(),
+          record: null,
+        },
+      })
+    );
+  }
+}
+
+/**
  * Hapus cache jika diperlukan (misal saat logout)
  */
 export function clearAttendanceCache() {

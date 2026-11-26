@@ -2,8 +2,10 @@
    MobileProfilPage.jsx — Profil Pengguna & Logout
    ============================================================ */
 
+import { useState } from 'react';
 import { useAuth } from '../../hooks/useAuth';
 import { useNavigate } from 'react-router-dom';
+import PWAInstallButton from '../../components/shared/PWAInstallButton';
 
 function getInitials(name = '') {
   return name.split(' ').slice(0, 2).map(n => n[0]).join('').toUpperCase();
@@ -27,12 +29,15 @@ const MENU_ITEMS = [
 export default function MobileProfilPage() {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
+  const [confirmLogout, setConfirmLogout] = useState(false);
 
-  const handleLogout = () => {
-    if (confirm('Yakin ingin keluar?')) {
-      logout();
-      navigate('/login');
+  const handleLogout = async () => {
+    if (!confirmLogout) {
+      setConfirmLogout(true);
+      return;
     }
+    await logout();
+    navigate('/login', { replace: true });
   };
 
   return (
@@ -134,6 +139,11 @@ export default function MobileProfilPage() {
         ))}
       </div>
 
+      {/* In-App Install PWA */}
+      <div style={{ marginBottom: '12px' }}>
+        <PWAInstallButton fullWidth />
+      </div>
+
       {/* Logout Button */}
       <button
         onClick={handleLogout}
@@ -141,9 +151,9 @@ export default function MobileProfilPage() {
           width: '100%',
           padding: '15px',
           borderRadius: '14px',
-          background: 'rgba(239, 68, 68, 0.1)',
-          border: '1px solid rgba(239, 68, 68, 0.2)',
-          color: '#DC2626',
+          background: confirmLogout ? '#DC2626' : 'rgba(239, 68, 68, 0.1)',
+          border: '1px solid rgba(239, 68, 68, 0.25)',
+          color: confirmLogout ? '#FFFFFF' : '#DC2626',
           fontSize: '15px',
           fontWeight: 600,
           cursor: 'pointer',
@@ -153,16 +163,34 @@ export default function MobileProfilPage() {
           gap: '8px',
           transition: 'all 0.2s ease',
         }}
-        onMouseEnter={e => e.currentTarget.style.background = 'rgba(239,68,68,0.2)'}
-        onMouseLeave={e => e.currentTarget.style.background = 'rgba(239,68,68,0.1)'}
       >
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
           <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
           <polyline points="16 17 21 12 16 7"/>
           <line x1="21" y1="12" x2="9" y2="12"/>
         </svg>
-        Keluar dari Aplikasi
+        {confirmLogout ? 'Ketuk Sekali Lagi untuk Keluar' : 'Keluar dari Aplikasi'}
       </button>
+      {confirmLogout && (
+        <button
+          type="button"
+          onClick={() => setConfirmLogout(false)}
+          style={{
+            width: '100%',
+            marginTop: '8px',
+            padding: '10px',
+            borderRadius: '12px',
+            background: 'transparent',
+            border: '1px solid #CBD5E1',
+            color: '#475569',
+            fontSize: '13px',
+            fontWeight: 500,
+            cursor: 'pointer',
+          }}
+        >
+          Batal
+        </button>
+      )}
 
       <style>{`
         @keyframes fadeInUp {

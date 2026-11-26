@@ -1,7 +1,6 @@
 /* AbsensiPage — Monitoring Absensi Siswa (Piket & Mapel) */
 
-import { useState, useEffect, Fragment } from 'react';
-import * as XLSX from 'xlsx';
+import { useState, useEffect, useMemo, Fragment } from 'react';
 import { getAttendance, getSubjectAttendance, getClasses, getSubjects, getStudents, getAcademicYears } from '../../services/api';
 import Card from '../../components/ui/Card';
 import Table from '../../components/ui/Table';
@@ -10,6 +9,7 @@ import Button from '../../components/ui/Button';
 import LoadingSpinner from '../../components/ui/LoadingSpinner';
 import StudentDetailModal from '../../components/ui/StudentDetailModal';
 import Toast from '../../components/ui/Toast';
+import AttendanceTrendChart from '../../components/dashboard/AttendanceTrendChart';
 
 export default function AbsensiPage() {
   const [activeTab, setActiveTab] = useState('piket'); // 'piket' | 'mapel'
@@ -122,6 +122,23 @@ export default function AbsensiPage() {
     }
   }, [selectedClass, selectedSubject, rekapMonth, activeTab, viewMode]);
 
+  // Index rekap records in O(1) Maps for fast monthly grid render & Excel export
+  const rekapPiketMap = useMemo(() => {
+    const map = new Map();
+    for (const row of rekapData) {
+      map.set(`${row.studentId}_${row.date}`, row);
+    }
+    return map;
+  }, [rekapData]);
+
+  const rekapMapelMap = useMemo(() => {
+    const map = new Map();
+    for (const row of rekapMapelData) {
+      map.set(`${row.studentId}_${row.date}`, row);
+    }
+    return map;
+  }, [rekapMapelData]);
+
   const statusBadge = (status) => {
     const map = {
       hadir: { variant: 'success', label: 'Hadir' },
@@ -170,7 +187,7 @@ export default function AbsensiPage() {
     transition: 'all var(--transition-fast)',
   });
 
-  const handleExport = () => {
+  const handleExport = async () => {
     let exportData = [];
     let fileName = '';
 
@@ -200,7 +217,7 @@ export default function AbsensiPage() {
           let totalH = 0, totalI = 0, totalS = 0, totalA = 0;
           for (let day = 1; day <= daysCount; day++) {
             const dateStr = `${rekapMonth}-${String(day).padStart(2, '0')}`;
-            const att = rekapData.find(a => a.studentId === s.id && a.date === dateStr);
+            const att = rekapPiketMap.get(`${s.id}_${dateStr}`);
             const statusVal = sesi === 'pagi' ? att?.statusPagi : att?.statusSore;
             row[`Tgl ${day}`] = statusVal?.toUpperCase() || '-';
             
@@ -235,7 +252,7 @@ export default function AbsensiPage() {
 
           daysArray.forEach(day => {
             const dateStr = `${rekapMonth}-${String(day).padStart(2, '0')}`;
-            const att = rekapMapelData.find(a => a.studentId === s.id && a.date === dateStr);
+            const att = rekapMapelMap.get(`${s.id}_${dateStr}`);
             const status = att?.status;
             
             if (status === 'hadir') totalH++;
@@ -277,6 +294,7 @@ export default function AbsensiPage() {
       return;
     }
 
+    const XLSX = await import('xlsx');
     const ws = XLSX.utils.json_to_sheet(exportData);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Data Absensi");
@@ -354,7 +372,7 @@ export default function AbsensiPage() {
                     </td>
                     {daysArray.map(day => {
                       const dateStr = `${rekapMonth}-${String(day).padStart(2, '0')}`;
-                      const att = rekapData.find(a => a.studentId === s.id && a.date === dateStr);
+                      const att = rekapPiketMap.get(`${s.id}_${dateStr}`);
                       const attStatus = sesi === 'pagi' ? att?.statusPagi : att?.statusSore;
                       
                       if (attStatus === 'hadir') totalH++;
@@ -448,7 +466,7 @@ export default function AbsensiPage() {
                     </td>
                     {daysArray.map(day => {
                       const dateStr = `${rekapMonth}-${String(day).padStart(2, '0')}`;
-                      const att = rekapMapelData.find(a => a.studentId === s.id && a.date === dateStr);
+                      const att = rekapMapelMap.get(`${s.id}_${dateStr}`);
                       const attStatus = att?.status;
                       
                       if (attStatus === 'hadir') totalH++;
@@ -638,6 +656,29 @@ export default function AbsensiPage() {
           </Button>
         </div>
       </div>
+
+      {/* Daily Attendance Trend Visualization (Recharts) */}
+      <AttendanceTrendChart
+        activeTab={activeTab}
+        selectedClass={selectedClass}
+        selectedSubject={selectedSubject}
+        sesi={sesi}
+        month={viewMode === 'monthly' ? rekapMonth : (selectedDate ? selectedDate.substring(0, 7) : rekapMonth)}
+        selectedDate={selectedDate}
+        preloadedRecords={
+          viewMode === 'monthly' && !rekapLoading
+            ? (activeTab === 'piket' ? rekapData : rekapMapelData)
+            : null
+        }
+        onSelectDate={(dateStr) => {
+          setSelectedDate(dateStr);
+          setViewMode('daily');
+        }}
+        onJumpToMonth={(targetMonth, targetDate) => {
+          setRekapMonth(targetMonth);
+          if (targetDate) setSelectedDate(targetDate);
+        }}
+      />
 
       {activeTab === 'piket' && viewMode === 'daily' && (
         <>

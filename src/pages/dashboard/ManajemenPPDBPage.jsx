@@ -5,7 +5,6 @@
 
 import { useState, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import * as XLSX from 'xlsx';
 import { getPPDBList, updatePPDBStatus, deletePPDB } from '../../services/api';
 import Button from '../../components/ui/Button';
 import Badge from '../../components/ui/Badge';
@@ -113,7 +112,7 @@ export default function ManajemenPPDBPage() {
     setEditNotes(item.notes || '');
   };
 
-  const handleExportExcel = () => {
+  const handleExportExcel = async () => {
     if (filteredList.length === 0) {
       setToast({ message: 'Tidak ada data untuk diekspor.', type: 'warning' });
       return;
@@ -134,6 +133,7 @@ export default function ManajemenPPDBPage() {
       Status: item.status,
       Catatan: item.notes || '-',
     }));
+    const XLSX = await import('xlsx');
     const worksheet = XLSX.utils.json_to_sheet(rows);
     const workbook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(workbook, worksheet, 'Pendaftar PPDB');

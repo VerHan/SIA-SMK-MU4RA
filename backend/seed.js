@@ -13,9 +13,9 @@ const MOCK_TEACHERS = [
 ];
 
 const MOCK_STUDENTS = [
-  { nis: '20240001', nisn: '0012345601', name: 'Muhammad Rizki', gender: 'L', phone_parent: '081345678901', alamat: 'Jl. Merdeka No. 1, Bangsri', sekolah_asal: 'SMPN 1 Bangsri' },
-  { nis: '20240002', nisn: '0012345602', name: 'Aisyah Putri', gender: 'P', phone_parent: '081345678902', alamat: 'Desa Kepuk RT 02 RW 01', sekolah_asal: 'MTsN 1 Jepara' },
-  { nis: '20240003', nisn: '0012345603', name: 'Dimas Aditya', gender: 'L', phone_parent: '081345678903', alamat: 'Perumahan Griya Asri Blok B1', sekolah_asal: 'SMPN 2 Keling' },
+  { nomor: '20240001', name: 'Muhammad Rizki', gender: 'L', phone_parent: '081345678901', alamat: 'Jl. Merdeka No. 1, Bangsri', sekolah_asal: 'SMPN 1 Bangsri' },
+  { nomor: '20240002', name: 'Aisyah Putri', gender: 'P', phone_parent: '081345678902', alamat: 'Desa Kepuk RT 02 RW 01', sekolah_asal: 'MTsN 1 Jepara' },
+  { nomor: '20240003', name: 'Dimas Aditya', gender: 'L', phone_parent: '081345678903', alamat: 'Perumahan Griya Asri Blok B1', sekolah_asal: 'SMPN 2 Keling' },
 ];
 
 const MOCK_SUBJECTS = [

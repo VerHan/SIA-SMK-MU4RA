@@ -19,32 +19,62 @@ import {
   MOCK_DUTY_SCHEDULE,
 } from '../src/services/mockData.js';
 import {
+  buildUserCapabilities,
+  calculateHaversineMeters,
+  clearSessionCookie,
+  computeAttendanceRiskTier,
+  DEFAULT_SCHOOL_GEOFENCE,
+  formatJakartaTimeHHMM,
   hashPassword,
-  verifyPassword,
+  hashPasswordAsync,
+  verifyPasswordAsync,
+  setSessionCookie,
   signToken,
   isValidRole,
   requireAuth,
+  requirePiketAccess,
   requireRole,
+  requireStudentReadAccess,
   sanitizeSafeUrl,
+  validateGeofenceConfig,
+  validateGeofenceCoords,
 } from './authUtils.js';
 
 const newId = () => crypto.randomUUID();
 const VALID_PPDB_STATUSES = new Set(['Menunggu Verifikasi', 'Diterima', 'Cadangan', 'Ditolak']);
+const VALID_NON_EMPTY_ATTENDANCE = new Set(['hadir', 'izin', 'sakit', 'alpha']);
+const VALID_ATTENDANCE_STATUSES = new Set(['hadir', 'izin', 'sakit', 'alpha', null, '', undefined]);
 
 export function createMockApiRouter() {
   const router = express.Router();
 
   // Seed users with scrypt-hashed passwords (zero plaintext in memory)
-  let users = MOCK_USERS.map(u => ({
-    id: u.id,
-    username: u.username,
-    password: hashPassword(u.password),
-    name: u.name,
-    role: u.role,
-    teacherId: u.teacherId || null,
-    studentId: u.studentId || null,
-    createdAt: new Date().toISOString(),
-  }));
+  // guru1 = Guru Piket + Wali Kelas XI TKJ 1; guru2 = Guru Reguler (Non-Piket) + Wali Kelas X RPL 1
+  const seedUsers = [
+    ...MOCK_USERS.map(u => ({
+      id: u.id,
+      username: u.username,
+      password: hashPassword(u.password),
+      name: u.name,
+      role: u.role,
+      isPiket: u.username === 'guru1' ? true : Boolean(u.isPiket),
+      teacherId: u.teacherId || null,
+      studentId: u.studentId || null,
+      createdAt: new Date().toISOString(),
+    })),
+    {
+      id: 'u006',
+      username: 'guru2',
+      password: hashPassword('guru123'),
+      name: 'Siti Nurhaliza, S.Kom.',
+      role: 'guru',
+      isPiket: false,
+      teacherId: 'g002',
+      studentId: null,
+      createdAt: new Date().toISOString(),
+    },
+  ];
+  let users = seedUsers;
 
   let tahunAjarList = MOCK_ACADEMIC_YEARS.map(t => ({ ...t }));
   let guruList = MOCK_TEACHERS.map(g => ({ ...g }));
@@ -72,7 +102,7 @@ export function createMockApiRouter() {
   let masterSesiList = MOCK_TIME_SLOTS.map((s, idx) => ({ id: `sesi-${idx + 1}`, order: idx, ...s }));
   let kalenderList = MOCK_ACADEMIC_CALENDAR.map(k => ({ ...k }));
   let jadwalList = MOCK_SCHEDULE.map(j => ({ ...j }));
-  let absensiPiketList = MOCK_ATTENDANCE.map(a => ({ ...a }));
+  let absensiPiketList = MOCK_ATTENDANCE.map(a => ({ ...a, updatedAt: a.updatedAt || new Date().toISOString() }));
   let absensiGuruList = MOCK_TEACHER_ATTENDANCE.map(a => ({ ...a }));
   let absensiMapelList = [];
   let nilaiList = MOCK_GRADES.map(g => {
@@ -172,9 +202,32 @@ export function createMockApiRouter() {
     res.status(200).json({ success: true, history: heartbeats.slice(0, 5) });
   });
 
+  const buildSafeAuthUser = (user) => {
+    const homeroomClasses = user.teacherId
+      ? kelasList
+          .filter(k => k.teacherId === user.teacherId)
+          .map(k => ({ id: k.id, name: k.name }))
+      : [];
+    const isPiket = user.role === 'guru' ? Boolean(user.isPiket) : false;
+    const baseUser = {
+      id: user.id,
+      username: user.username,
+      name: user.name,
+      role: user.role,
+      isPiket,
+      teacherId: user.teacherId || null,
+      studentId: user.studentId || null,
+      homeroomClasses,
+    };
+    return {
+      ...baseUser,
+      capabilities: buildUserCapabilities(baseUser, homeroomClasses),
+    };
+  };
+
   // --- Auth & User Management ---
-  router.post('/auth/login', (req, res) => {
-    const { username, password } = req.body || {};
+  router.post('/auth/login', async (req, res) => {
+    const { username, password, rememberMe = true } = req.body || {};
     if (!username || !password) {
       return res.status(400).json({ success: false, error: 'Username dan password wajib diisi' });
     }
@@ -183,35 +236,31 @@ export function createMockApiRouter() {
     if (!user) {
       return res.status(401).json({ success: false, error: 'Username atau password salah' });
     }
-    const { valid } = verifyPassword(password, user.password);
+    const { valid } = await verifyPasswordAsync(password, user.password);
     if (!valid) {
       return res.status(401).json({ success: false, error: 'Username atau password salah' });
     }
-    const safeUser = {
-      id: user.id,
-      username: user.username,
-      name: user.name,
-      role: user.role,
-      teacherId: user.teacherId || null,
-      studentId: user.studentId || null,
-    };
-    const token = signToken(safeUser);
-    return res.json({ success: true, token, user: safeUser });
+    const safeUser = buildSafeAuthUser(user);
+    const persistSession = rememberMe !== false;
+    const token = signToken(safeUser, { rememberMe: persistSession });
+    setSessionCookie(req, res, token, { rememberMe: persistSession });
+    return res.json({ success: true, token, user: safeUser, rememberMe: persistSession });
+  });
+
+  router.post('/auth/logout', (req, res) => {
+    clearSessionCookie(req, res);
+    return res.json({ success: true, message: 'Berhasil keluar dari sesi.' });
   });
 
   router.get('/auth/me', requireAuth, (req, res) => {
     const user = users.find(u => u.id === req.authUser.id);
     if (!user) return res.status(401).json({ success: false, error: 'Akun tidak ditemukan' });
+    const safeUser = buildSafeAuthUser(user);
+    const token = signToken(safeUser, { rememberMe: true });
     res.json({
       success: true,
-      user: {
-        id: user.id,
-        username: user.username,
-        name: user.name,
-        role: user.role,
-        teacherId: user.teacherId || null,
-        studentId: user.studentId || null,
-      },
+      token,
+      user: safeUser,
     });
   });
 
@@ -219,22 +268,18 @@ export function createMockApiRouter() {
     res.json(users.map(u => {
       const guru = u.teacherId ? guruList.find(g => g.id === u.teacherId) : null;
       const siswa = u.studentId ? siswaList.find(s => s.id === u.studentId) : null;
+      const safe = buildSafeAuthUser(u);
       return {
-        id: u.id,
-        username: u.username,
-        name: u.name,
-        role: u.role,
-        teacherId: u.teacherId || null,
+        ...safe,
         teacherName: guru?.name || null,
-        studentId: u.studentId || null,
         studentName: siswa?.name || null,
         createdAt: u.createdAt,
       };
     }));
   });
 
-  router.post('/users', requireRole('admin'), (req, res) => {
-    const { username, password, name, role, teacherId, studentId } = req.body || {};
+  router.post('/users', requireRole('admin'), async (req, res) => {
+    const { username, password, name, role, isPiket, teacherId, studentId } = req.body || {};
     const cleanUsername = String(username || '').trim();
     const cleanName = String(name || '').trim();
     if (!cleanUsername || !cleanName || !password || String(password).length < 6) {
@@ -249,38 +294,40 @@ export function createMockApiRouter() {
     const created = {
       id: newId(),
       username: cleanUsername,
-      password: hashPassword(password),
+      password: await hashPasswordAsync(password),
       name: cleanName,
       role,
-      teacherId: teacherId ? String(teacherId).trim() : null,
-      studentId: studentId ? String(studentId).trim() : null,
+      isPiket: role === 'guru' ? Boolean(isPiket) : false,
+      teacherId: role === 'guru' && teacherId ? String(teacherId).trim() : null,
+      studentId: role === 'wali_murid' && studentId ? String(studentId).trim() : null,
       createdAt: new Date().toISOString(),
     };
     users.push(created);
-    const { password: _, ...safe } = created;
-    res.json({ success: true, data: safe, message: 'Akun pengguna berhasil dibuat.' });
+    res.json({ success: true, data: buildSafeAuthUser(created), message: 'Akun pengguna berhasil dibuat.' });
   });
 
-  router.put('/users/:id', requireRole('admin'), (req, res) => {
+  router.put('/users/:id', requireRole('admin'), async (req, res) => {
     const idx = users.findIndex(u => u.id === req.params.id);
     if (idx === -1) return res.status(404).json({ success: false, error: 'Akun tidak ditemukan.' });
-    const { name, role, password, teacherId, studentId } = req.body || {};
-    if (role !== undefined && !isValidRole(role)) {
+    const { name, role, isPiket, password, teacherId, studentId } = req.body || {};
+    const nextRole = role !== undefined ? role : users[idx].role;
+    if (!isValidRole(nextRole)) {
       return res.status(400).json({ success: false, error: 'Role tidak valid.' });
     }
     if (password && String(password).trim() && String(password).length < 6) {
       return res.status(400).json({ success: false, error: 'Password minimal 6 karakter.' });
     }
+    const hashedPassword = password && String(password).trim() ? await hashPasswordAsync(password) : null;
     users[idx] = {
       ...users[idx],
       ...(name && String(name).trim() ? { name: String(name).trim() } : {}),
-      ...(role !== undefined ? { role } : {}),
-      ...(password && String(password).trim() ? { password: hashPassword(password) } : {}),
-      ...(teacherId !== undefined ? { teacherId: teacherId ? String(teacherId).trim() : null } : {}),
-      ...(studentId !== undefined ? { studentId: studentId ? String(studentId).trim() : null } : {}),
+      role: nextRole,
+      isPiket: nextRole === 'guru' ? Boolean(isPiket !== undefined ? isPiket : users[idx].isPiket) : false,
+      ...(hashedPassword ? { password: hashedPassword } : {}),
+      ...(teacherId !== undefined ? { teacherId: nextRole === 'guru' && teacherId ? String(teacherId).trim() : null } : {}),
+      ...(studentId !== undefined ? { studentId: nextRole === 'wali_murid' && studentId ? String(studentId).trim() : null } : {}),
     };
-    const { password: _, ...safe } = users[idx];
-    res.json({ success: true, data: safe, message: 'Akun pengguna berhasil diperbarui.' });
+    res.json({ success: true, data: buildSafeAuthUser(users[idx]), message: 'Akun pengguna berhasil diperbarui.' });
   });
 
   router.delete('/users/:id', requireRole('admin'), (req, res) => {
@@ -523,41 +570,309 @@ export function createMockApiRouter() {
     res.json({ success: true, message: 'Jadwal berhasil dihapus.' });
   });
 
-  // --- Absensi Piket Siswa ---
-  router.get('/absensi', (req, res) => {
-    const { kelas, date, month } = req.query;
+  // --- Absensi Piket Siswa (Concurrency-safe + Piket/Staff/Admin RBAC) ---
+  router.get('/absensi', requireAuth, (req, res) => {
+    const { kelas, date, month, studentId } = req.query;
     let list = [...absensiPiketList];
-    if (kelas) list = list.filter(a => a.class === kelas);
+    if (req.authUser.role === 'wali_murid') {
+      list = list.filter(a => a.studentId === (req.authUser.studentId || '__no_linked_student__'));
+    } else {
+      if (studentId) list = list.filter(a => a.studentId === studentId);
+      if (kelas) list = list.filter(a => a.class === kelas);
+    }
     if (date) list = list.filter(a => a.date === date);
     if (month) list = list.filter(a => (a.date || '').startsWith(month));
     res.json(list);
   });
 
-  router.post('/absensi', requireRole('admin', 'guru', 'staff'), (req, res) => {
-    const { records } = req.body || {};
+  router.post('/absensi', requirePiketAccess, (req, res) => {
+    const { records, session, force } = req.body || {};
     if (!Array.isArray(records) || records.length === 0) {
       return res.status(400).json({ success: false, error: 'Data absensi kosong.' });
     }
-    records.forEach(record => {
-      if (!record.studentId || !record.date) return;
-      const idx = absensiPiketList.findIndex(a => a.studentId === record.studentId && a.date === record.date);
-      const student = siswaList.find(s => s.id === record.studentId);
-      if (idx !== -1) {
-        absensiPiketList[idx] = { ...absensiPiketList[idx], ...record };
-      } else {
-        absensiPiketList.push({
-          id: newId(),
-          studentName: student?.name || record.studentName || '-',
-          class: student?.class || record.class || '-',
-          ...record,
-        });
+    const cleanSession = session === 'pagi' || session === 'sore' ? session : null;
+    const conflicts = [];
+    const staged = [];
+
+    for (const rec of records) {
+      if (!rec.studentId || !rec.date) continue;
+      if (!VALID_ATTENDANCE_STATUSES.has(rec.statusPagi) || !VALID_ATTENDANCE_STATUSES.has(rec.statusSore)) {
+        continue;
       }
+      const dateStr = String(rec.date).split('T')[0];
+      const idx = absensiPiketList.findIndex(a => a.studentId === rec.studentId && a.date === dateStr);
+      const existing = idx !== -1 ? absensiPiketList[idx] : null;
+
+      // Optimistic concurrency check
+      if (!force && existing && rec.expectedUpdatedAt) {
+        const existingMs = existing.updatedAt ? new Date(existing.updatedAt).getTime() : 0;
+        const expectedMs = new Date(rec.expectedUpdatedAt).getTime();
+        if (!Number.isNaN(expectedMs) && existingMs > expectedMs) {
+          const sameSessionConflict =
+            cleanSession === 'pagi'
+              ? (rec.expectedStatusPagi !== undefined
+                  ? (existing.statusPagi || null) !== (rec.expectedStatusPagi || null)
+                  : Boolean(existing.statusPagi))
+              : cleanSession === 'sore'
+                ? (rec.expectedStatusSore !== undefined
+                    ? (existing.statusSore || null) !== (rec.expectedStatusSore || null)
+                    : Boolean(existing.statusSore))
+                : true;
+
+          if (sameSessionConflict) {
+            conflicts.push({
+              studentId: rec.studentId,
+              studentName: existing.studentName || rec.studentName || rec.studentId,
+              date: dateStr,
+              serverStatusPagi: existing.statusPagi || null,
+              serverStatusSore: existing.statusSore || null,
+              serverUpdatedAt: existing.updatedAt || null,
+            });
+            continue;
+          }
+        }
+      }
+
+      const nextPagi = VALID_NON_EMPTY_ATTENDANCE.has(rec.statusPagi) ? rec.statusPagi : null;
+      const nextSore = VALID_NON_EMPTY_ATTENDANCE.has(rec.statusSore) ? rec.statusSore : null;
+      const patch = {};
+      if (cleanSession === 'pagi') {
+        if (nextPagi || rec.allowClear) patch.statusPagi = nextPagi;
+      } else if (cleanSession === 'sore') {
+        if (nextSore || rec.allowClear) patch.statusSore = nextSore;
+      } else {
+        if (nextPagi || rec.allowClear) patch.statusPagi = nextPagi;
+        if (nextSore || rec.allowClear) patch.statusSore = nextSore;
+      }
+      if (Object.keys(patch).length === 0) continue;
+
+      staged.push({ rec, dateStr, idx, patch });
+    }
+
+    if (conflicts.length > 0) {
+      return res.status(409).json({
+        success: false,
+        conflict: true,
+        error: 'Data absensi sesi ini baru saja diperbarui oleh petugas lain. Muat ulang data terbaru sebelum menyimpan.',
+        conflicts,
+      });
+    }
+
+    const nowIso = new Date().toISOString();
+    const recordedByUserId = req.authUser?.id || null;
+    const recordedByGuruId = req.authUser?.teacherId || null;
+    const recordedByName = req.authUser?.name || null;
+    const saved = [];
+    for (const item of staged) {
+      const { rec, dateStr, idx, patch } = item;
+      const student = siswaList.find(s => s.id === rec.studentId);
+      if (!student) continue;
+      const className = student.class || rec.class || '-';
+      const kelasObj = kelasList.find(k => k.name === className);
+      const kelasId = kelasObj?.id || null;
+      if (idx !== -1) {
+        absensiPiketList[idx] = {
+          ...absensiPiketList[idx],
+          ...patch,
+          kelasId: kelasId || absensiPiketList[idx].kelasId || null,
+          recordedByUserId,
+          recordedByGuruId,
+          recordedByName,
+          updatedAt: nowIso,
+        };
+        saved.push(absensiPiketList[idx]);
+      } else {
+        const created = {
+          id: newId(),
+          studentId: rec.studentId,
+          studentName: student.name,
+          kelasId,
+          class: className,
+          date: dateStr,
+          statusPagi: patch.statusPagi ?? null,
+          statusSore: patch.statusSore ?? null,
+          recordedByUserId,
+          recordedByGuruId,
+          recordedByName,
+          updatedAt: nowIso,
+        };
+        absensiPiketList.push(created);
+        saved.push(created);
+      }
+    }
+
+    if (saved.length === 0) {
+      return res.status(400).json({ success: false, error: 'Tidak ada data siswa atau status absensi yang valid.' });
+    }
+
+    res.json({ success: true, savedCount: saved.length, records: saved, message: 'Absensi piket berhasil disimpan.' });
+  });
+
+  // Helper internal: profil kehadiran & risk tier per siswa
+  const buildStudentAttendanceBundle = (studentId, month) => {
+    const student = siswaList.find(s => s.id === studentId);
+    if (!student) return null;
+
+    let piket = absensiPiketList.filter(a => a.studentId === studentId);
+    let mapel = absensiMapelList.filter(a => a.studentId === studentId);
+    if (month && /^\d{4}-\d{2}$/.test(month)) {
+      piket = piket.filter(a => (a.date || '').startsWith(month));
+      mapel = mapel.filter(a => (a.date || '').startsWith(month));
+    }
+
+    piket = [...piket].sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+    mapel = [...mapel].sort((a, b) => (b.date || '').localeCompare(a.date || '') || (a.jamKe || 0) - (b.jamKe || 0));
+
+    const piketRecords = piket.map(a => ({
+      id: a.id,
+      date: a.date,
+      statusPagi: a.statusPagi || '-',
+      statusSore: a.statusSore || '-',
+      updatedAt: a.updatedAt || null,
+    }));
+
+    const mapelRecords = mapel.map(a => ({
+      id: a.id,
+      date: a.date,
+      jamKe: a.jamKe,
+      mapelId: a.mapelId,
+      subject: a.subject || '-',
+      teacherName: a.teacherName || '-',
+      class: a.class || student.class || '-',
+      status: a.status,
+    }));
+
+    const piketSummary = {
+      totalHari: piketRecords.length,
+      hadir: piketRecords.filter(r => r.statusPagi === 'hadir').length,
+      izin: piketRecords.filter(r => r.statusPagi === 'izin').length,
+      sakit: piketRecords.filter(r => r.statusPagi === 'sakit').length,
+      alpha: piketRecords.filter(r => r.statusPagi === 'alpha').length,
+      bolos: piketRecords.filter(r => r.statusPagi === 'hadir' && r.statusSore === 'alpha').length,
+    };
+
+    const mapelHadir = mapelRecords.filter(r => r.status === 'hadir').length;
+    const mapelTotal = mapelRecords.length;
+    const mapelSummary = {
+      totalSesi: mapelTotal,
+      hadir: mapelHadir,
+      izin: mapelRecords.filter(r => r.status === 'izin').length,
+      sakit: mapelRecords.filter(r => r.status === 'sakit').length,
+      alpha: mapelRecords.filter(r => r.status === 'alpha').length,
+      persentase: mapelTotal > 0 ? Math.round((mapelHadir / mapelTotal) * 100) : 0,
+    };
+
+    const kelasObj = kelasList.find(k => k.name === student.class);
+    const waliGuru = kelasObj?.teacherId ? guruList.find(g => g.id === kelasObj.teacherId) : null;
+    const riskStatus = computeAttendanceRiskTier({ piketSummary, mapelSummary });
+
+    return {
+      success: true,
+      month: month || 'all',
+      student: {
+        id: student.id,
+        nomor: student.nomor || student.nis || '-',
+        name: student.name,
+        class: student.class || '-',
+        gender: student.gender || 'L',
+        status: student.status || 'aktif',
+        phone: student.phone || '-',
+        phone_parent: student.phone_parent || '-',
+        alamat: student.alamat || '-',
+        sekolah_asal: student.sekolah_asal || '-',
+      },
+      homeroomTeacher: waliGuru ? { id: waliGuru.id, name: waliGuru.name, phone: waliGuru.phone || '-' } : null,
+      summary: {
+        piket: piketSummary,
+        mapel: mapelSummary,
+      },
+      riskStatus,
+      piketRecords,
+      mapelRecords,
+    };
+  };
+
+  // --- Detail Kehadiran per Siswa (Piket + Mapel, strict ownership untuk wali_murid) ---
+  router.get('/siswa/:id/absensi', requireStudentReadAccess, (req, res) => {
+    const bundle = buildStudentAttendanceBundle(req.params.id, req.query.month);
+    if (!bundle) {
+      return res.status(404).json({ success: false, error: 'Data siswa tidak ditemukan.' });
+    }
+    res.json(bundle);
+  });
+
+  // --- Portal Wali Murid (Read-Only, strictly scoped to authUser.studentId) ---
+  router.get('/guardian/overview', requireRole('wali_murid', 'admin'), (req, res) => {
+    const targetStudentId =
+      req.authUser.role === 'wali_murid'
+        ? req.authUser.studentId
+        : (req.query.studentId || req.authUser.studentId);
+
+    if (!targetStudentId) {
+      return res.status(400).json({
+        success: false,
+        error: 'Akun wali murid belum dihubungkan ke data siswa. Hubungi admin sekolah.',
+      });
+    }
+    const bundle = buildStudentAttendanceBundle(targetStudentId, req.query.month);
+    if (!bundle) {
+      return res.status(404).json({ success: false, error: 'Data siswa yang terhubung tidak ditemukan.' });
+    }
+    res.json(bundle);
+  });
+
+  // --- Monitoring Wali Kelas (strictly scoped to Kelas.teacherId for role 'guru') ---
+  router.get('/monitoring/homeroom', requireRole('guru', 'admin', 'kepsek', 'staff'), (req, res) => {
+    const { month, kelas: kelasQuery } = req.query;
+    const assignedClasses = req.authUser.role === 'guru'
+      ? kelasList.filter(k => req.authUser.teacherId && k.teacherId === req.authUser.teacherId)
+      : [...kelasList].sort((a, b) => a.name.localeCompare(b.name));
+
+    if (assignedClasses.length === 0) {
+      return res.json({ success: true, month: month || 'all', classes: [], students: [], summary: { total: 0, hijau: 0, kuning: 0, merah: 0 } });
+    }
+
+    const allowedNames = new Set(assignedClasses.map(c => c.name));
+    const selectedClassName = kelasQuery && allowedNames.has(kelasQuery)
+      ? kelasQuery
+      : assignedClasses[0].name;
+
+    const classStudents = siswaList.filter(
+      s => s.class === selectedClassName && (s.status || 'aktif') === 'aktif'
+    );
+
+    const tierRank = { merah: 0, kuning: 1, hijau: 2 };
+    const rows = classStudents.map(s => {
+      const b = buildStudentAttendanceBundle(s.id, month);
+      return {
+        id: s.id,
+        nomor: s.nomor || s.nis || '-',
+        name: s.name,
+        class: selectedClassName,
+        phone_parent: s.phone_parent || '-',
+        piket: b.summary.piket,
+        mapel: b.summary.mapel,
+        riskStatus: b.riskStatus,
+      };
+    }).sort((a, b) => (tierRank[a.riskStatus.tier] ?? 2) - (tierRank[b.riskStatus.tier] ?? 2) || a.name.localeCompare(b.name));
+
+    res.json({
+      success: true,
+      month: month || 'all',
+      selectedClass: selectedClassName,
+      classes: assignedClasses.map(c => ({ id: c.id, name: c.name, grade: c.grade, major: c.major })),
+      summary: {
+        total: rows.length,
+        hijau: rows.filter(r => r.riskStatus.tier === 'hijau').length,
+        kuning: rows.filter(r => r.riskStatus.tier === 'kuning').length,
+        merah: rows.filter(r => r.riskStatus.tier === 'merah').length,
+      },
+      students: rows,
     });
-    res.json({ success: true, message: 'Absensi piket berhasil disimpan.' });
   });
 
   // --- Monitoring Kelas (CCTV Real-time) ---
-  router.get('/monitoring/kelas', (req, res) => {
+  router.get('/monitoring/kelas', requireRole('admin', 'guru', 'staff', 'kepsek'), (req, res) => {
     const days = ['Minggu', 'Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu'];
     const { dateStr } = getJakartaNow();
     const day = req.query.day || days[new Date().getDay()] || 'Senin';
@@ -611,12 +926,16 @@ export function createMockApiRouter() {
   });
 
   // --- Nilai Siswa ---
-  router.get('/nilai', (req, res) => {
+  router.get('/nilai', requireAuth, (req, res) => {
     const { studentId, mapelId, kelas, subject, type } = req.query;
     let list = [...nilaiList];
-    if (studentId) list = list.filter(n => n.studentId === studentId);
+    if (req.authUser.role === 'wali_murid') {
+      list = list.filter(n => n.studentId === (req.authUser.studentId || '__no_linked_student__'));
+    } else {
+      if (studentId) list = list.filter(n => n.studentId === studentId);
+      if (kelas) list = list.filter(n => n.class === kelas);
+    }
     if (mapelId) list = list.filter(n => n.mapelId === mapelId);
-    if (kelas) list = list.filter(n => n.class === kelas);
     if (subject) list = list.filter(n => n.subject === subject);
     if (type) list = list.filter(n => n.type === type);
     res.json(list);
@@ -707,10 +1026,14 @@ export function createMockApiRouter() {
     res.json({ success: true, message: 'Aturan poin berhasil dihapus.' });
   });
 
-  router.get('/poin-sikap', (req, res) => {
+  router.get('/poin-sikap', requireAuth, (req, res) => {
     const { siswaId } = req.query;
     let list = [...poinSikapList];
-    if (siswaId) list = list.filter(p => p.siswaId === siswaId);
+    if (req.authUser.role === 'wali_murid') {
+      list = list.filter(p => p.siswaId === (req.authUser.studentId || '__no_linked_student__'));
+    } else if (siswaId) {
+      list = list.filter(p => p.siswaId === siswaId);
+    }
     res.json(list);
   });
 
@@ -740,8 +1063,31 @@ export function createMockApiRouter() {
     res.json({ success: true, message: 'Catatan poin berhasil dihapus.' });
   });
 
-  // --- Guru Absensi ---
-  router.get('/guru/absen', (req, res) => {
+  // --- School Geofence Settings (Authoritative for all devices) ---
+  let schoolGeofenceConfig = { ...DEFAULT_SCHOOL_GEOFENCE };
+
+  router.get('/settings/geofence', requireAuth, (req, res) => {
+    res.json({ success: true, data: schoolGeofenceConfig });
+  });
+
+  router.put('/settings/geofence', requireRole('admin'), (req, res) => {
+    const valid = validateGeofenceConfig(req.body);
+    if (!valid) {
+      return res.status(400).json({
+        success: false,
+        error: 'Koordinat atau radius tidak valid (radius harus antara 20m – 2000m).',
+      });
+    }
+    schoolGeofenceConfig = valid;
+    res.json({
+      success: true,
+      data: schoolGeofenceConfig,
+      message: 'Pengaturan Geofence sekolah berhasil disimpan untuk semua perangkat.',
+    });
+  });
+
+  // --- Guru Absensi (Protected & Server-Side Geofence Enforced) ---
+  router.get('/guru/absen', requireRole('admin', 'guru', 'staff', 'kepsek'), (req, res) => {
     const { date, teacherName, guruId, teacherId } = req.query;
     const targetGuruId = teacherId || guruId;
     let list = [...absensiGuruList];
@@ -758,29 +1104,67 @@ export function createMockApiRouter() {
       date: a.tanggal,
       tanggal: a.tanggal,
       status: a.status,
-      timeIn: a.jamMasuk,
-      jamMasuk: a.jamMasuk,
-      timeOut: a.jamPulang,
-      jamPulang: a.jamPulang,
+      timeIn: a.jamMasuk ? String(a.jamMasuk).replace('.', ':') : null,
+      jamMasuk: a.jamMasuk ? String(a.jamMasuk).replace('.', ':') : null,
+      timeOut: a.jamPulang ? String(a.jamPulang).replace('.', ':') : null,
+      jamPulang: a.jamPulang ? String(a.jamPulang).replace('.', ':') : null,
       source: a.sumber,
       sumber: a.sumber,
       distanceMeters: a.jarakMeter,
       jarakMeter: a.jarakMeter,
+      isWithinGeofence: a.status !== 'luar_radius',
       keterangan: a.keterangan || '',
     })));
   });
 
-  router.post('/guru/absen', requireAuth, (req, res) => {
-    const { teacherName, teacherId, guruId, type, distanceMeters, isWithinGeofence } = req.body || {};
-    const targetGuruId = teacherId || guruId || req.authUser?.teacherId;
-    const targetName = teacherName || req.authUser?.name;
+  router.post('/guru/absen', requireRole('admin', 'guru', 'staff', 'kepsek'), (req, res) => {
+    const { teacherName, teacherId, guruId, type, coords } = req.body || {};
+    if (type !== 'in' && type !== 'out') {
+      return res.status(400).json({ success: false, message: 'Tipe absen tidak valid' });
+    }
+
+    // 1. Validasi koordinat & jarak mutlak di dalam area sekolah langsung di server
+    const validCoords = validateGeofenceCoords(coords);
+    if (!validCoords) {
+      return res.status(400).json({
+        success: false,
+        message: 'Koordinat GPS tidak valid. Silakan deteksi lokasi Anda di area sekolah terlebih dahulu.',
+      });
+    }
+
+    const serverDistance = calculateHaversineMeters(
+      validCoords.latitude,
+      validCoords.longitude,
+      schoolGeofenceConfig.latitude,
+      schoolGeofenceConfig.longitude
+    );
+
+    if (serverDistance > schoolGeofenceConfig.radiusMeters) {
+      return res.status(403).json({
+        success: false,
+        message: `Absen ditolak! Anda berada ${serverDistance}m dari sekolah (batas maksimal ${schoolGeofenceConfig.radiusMeters}m). Absensi mutlak harus dilakukan di dalam area sekolah.`,
+        distanceMeters: serverDistance,
+        radiusMeters: schoolGeofenceConfig.radiusMeters,
+      });
+    }
+
+    // 2. Kunci identitas guru berdasarkan akun yang login
+    const isAdmin = req.authUser?.role === 'admin';
+    const targetGuruId = isAdmin
+      ? (teacherId || guruId || req.authUser?.teacherId)
+      : req.authUser?.teacherId;
+    const targetName = isAdmin
+      ? (teacherName || req.authUser?.name)
+      : req.authUser?.name;
+
     let guru = guruList.find(g => (targetGuruId && g.id === targetGuruId) || (targetName && g.name === targetName));
     if (!guru && targetName) {
-      guru = { id: targetGuruId || newId(), name: targetName };
+      guru = { id: targetGuruId || req.authUser?.id || newId(), name: targetName };
     }
-    if (!guru) return res.status(404).json({ success: false, message: 'Guru tidak ditemukan' });
+    if (!guru) return res.status(404).json({ success: false, message: 'Data profil guru tidak ditemukan.' });
 
-    const { dateStr, timeStr } = getJakartaNow();
+    const { dateStr } = getJakartaNow();
+    const timeStr = formatJakartaTimeHHMM(new Date());
     let idx = absensiGuruList.findIndex(a => a.guruId === guru.id && a.tanggal === dateStr);
 
     const toRecord = (a) => ({
@@ -792,12 +1176,13 @@ export function createMockApiRouter() {
       date: a.tanggal,
       tanggal: a.tanggal,
       status: a.status,
-      timeIn: a.jamMasuk,
-      jamMasuk: a.jamMasuk,
-      timeOut: a.jamPulang,
-      jamPulang: a.jamPulang,
+      timeIn: a.jamMasuk ? String(a.jamMasuk).replace('.', ':') : null,
+      jamMasuk: a.jamMasuk ? String(a.jamMasuk).replace('.', ':') : null,
+      timeOut: a.jamPulang ? String(a.jamPulang).replace('.', ':') : null,
+      jamPulang: a.jamPulang ? String(a.jamPulang).replace('.', ':') : null,
       distanceMeters: a.jarakMeter,
       jarakMeter: a.jarakMeter,
+      isWithinGeofence: true,
       source: a.sumber,
       sumber: a.sumber,
     });
@@ -811,30 +1196,26 @@ export function createMockApiRouter() {
         guruId: guru.id,
         guruName: guru.name,
         tanggal: dateStr,
-        status: isWithinGeofence ? 'hadir' : 'luar_radius',
+        status: 'hadir',
         sumber: 'gps',
         jamMasuk: timeStr,
         jamPulang: idx !== -1 ? absensiGuruList[idx].jamPulang : null,
-        jarakMeter: distanceMeters ?? null,
+        jarakMeter: serverDistance,
         keterangan: '',
       };
       if (idx !== -1) absensiGuruList[idx] = rec;
       else absensiGuruList.unshift(rec);
-      return res.json({ success: true, message: 'Berhasil Absen Masuk!', record: toRecord(rec) });
+      return res.json({ success: true, message: `Berhasil Absen Masuk pukul ${timeStr} WIB!`, record: toRecord(rec) });
     }
 
-    if (type === 'out') {
-      if (idx === -1 || !absensiGuruList[idx].jamMasuk) {
-        return res.json({ success: false, message: 'Anda belum absen masuk' });
-      }
-      if (absensiGuruList[idx].jamPulang) {
-        return res.json({ success: false, message: 'Anda sudah absen pulang hari ini', record: toRecord(absensiGuruList[idx]) });
-      }
-      absensiGuruList[idx] = { ...absensiGuruList[idx], jamPulang: timeStr };
-      return res.json({ success: true, message: 'Berhasil Absen Pulang!', record: toRecord(absensiGuruList[idx]) });
+    if (idx === -1 || !absensiGuruList[idx].jamMasuk) {
+      return res.json({ success: false, message: 'Anda belum absen masuk' });
     }
-
-    return res.status(400).json({ success: false, message: 'Tipe absen tidak valid' });
+    if (absensiGuruList[idx].jamPulang) {
+      return res.json({ success: false, message: 'Anda sudah absen pulang hari ini', record: toRecord(absensiGuruList[idx]) });
+    }
+    absensiGuruList[idx] = { ...absensiGuruList[idx], jamPulang: timeStr, jarakMeter: serverDistance };
+    return res.json({ success: true, message: `Berhasil Absen Pulang pukul ${timeStr} WIB!`, record: toRecord(absensiGuruList[idx]) });
   });
 
   router.post('/guru/absen/manual', requireRole('admin', 'staff'), (req, res) => {
@@ -957,10 +1338,21 @@ export function createMockApiRouter() {
   });
 
   // --- Siswa ---
-  router.get('/siswa', (req, res) => {
-    const { kelas } = req.query;
+  const VALID_STUDENT_STATUSES = new Set(['aktif', 'lulus', 'pindah', 'nonaktif']);
+
+  router.get('/siswa', requireAuth, (req, res) => {
+    const { kelas, status, includeInactive } = req.query;
     let list = [...siswaList];
-    if (kelas) list = list.filter(s => s.class === kelas);
+    if (req.authUser.role === 'wali_murid') {
+      list = list.filter(s => s.id === (req.authUser.studentId || '__no_linked_student__'));
+    } else {
+      if (status && status !== 'all' && VALID_STUDENT_STATUSES.has(status)) {
+        list = list.filter(s => (s.status || 'aktif') === status);
+      } else if (includeInactive !== 'true' && status !== 'all') {
+        list = list.filter(s => (s.status || 'aktif') === 'aktif');
+      }
+      if (kelas) list = list.filter(s => s.class === kelas);
+    }
     list.sort((a, b) => a.name.localeCompare(b.name));
     res.json(list.map(s => ({
       id: s.id,
@@ -969,6 +1361,7 @@ export function createMockApiRouter() {
       name: s.name,
       class: s.class || '-',
       gender: s.gender || 'L',
+      status: s.status || 'aktif',
       phone: s.phone || '-',
       phone_parent: s.phone_parent || '-',
       pekerjaan_ortu: s.pekerjaan_ortu || '-',
@@ -978,7 +1371,7 @@ export function createMockApiRouter() {
   });
 
   router.post('/siswa', requireRole('admin', 'staff'), (req, res) => {
-    const { nomor, nis, name, gender, phone, phone_parent, pekerjaan_ortu, alamat, sekolah_asal, class: kelasName } = req.body || {};
+    const { nomor, nis, name, gender, status, phone, phone_parent, pekerjaan_ortu, alamat, sekolah_asal, class: kelasName } = req.body || {};
     if (!name || !String(name).trim()) {
       return res.status(400).json({ success: false, error: 'Nama Siswa wajib diisi' });
     }
@@ -990,6 +1383,7 @@ export function createMockApiRouter() {
       name: String(name).trim(),
       class: kelasName || '-',
       gender: gender || 'L',
+      status: VALID_STUDENT_STATUSES.has(status) ? status : 'aktif',
       phone: phone ? String(phone).trim() : '-',
       phone_parent: phone_parent ? String(phone_parent).trim() : '-',
       pekerjaan_ortu: pekerjaan_ortu ? String(pekerjaan_ortu).trim() : '-',
@@ -1017,6 +1411,7 @@ export function createMockApiRouter() {
         name: String(item.name).trim(),
         class: item.class || '-',
         gender: item.gender || 'L',
+        status: 'aktif',
         phone: item.phone ? String(item.phone) : '-',
         phone_parent: item.phone_parent ? String(item.phone_parent) : '-',
         pekerjaan_ortu: item.pekerjaan_ortu ? String(item.pekerjaan_ortu) : '-',
@@ -1031,7 +1426,10 @@ export function createMockApiRouter() {
   router.put('/siswa/:id', requireRole('admin', 'staff'), (req, res) => {
     const idx = siswaList.findIndex(s => s.id === req.params.id);
     if (idx === -1) return res.status(404).json({ success: false, error: 'Siswa tidak ditemukan' });
-    const { nomor, nis, name, gender, phone, phone_parent, pekerjaan_ortu, alamat, sekolah_asal, class: kelasName } = req.body || {};
+    const { nomor, nis, name, gender, status, phone, phone_parent, pekerjaan_ortu, alamat, sekolah_asal, class: kelasName } = req.body || {};
+    if (status !== undefined && !VALID_STUDENT_STATUSES.has(status)) {
+      return res.status(400).json({ success: false, error: 'Status siswa tidak valid.' });
+    }
     const finalNomor = nomor !== undefined ? (nomor ? String(nomor).trim() : null) : siswaList[idx].nomor;
     siswaList[idx] = {
       ...siswaList[idx],
@@ -1040,18 +1438,35 @@ export function createMockApiRouter() {
       name: name ?? siswaList[idx].name,
       class: kelasName ?? siswaList[idx].class,
       gender: gender || siswaList[idx].gender,
+      status: status ?? siswaList[idx].status ?? 'aktif',
       phone: phone !== undefined ? (phone ? String(phone).trim() : '-') : siswaList[idx].phone,
       phone_parent: phone_parent !== undefined ? (phone_parent ? String(phone_parent).trim() : '-') : siswaList[idx].phone_parent,
       pekerjaan_ortu: pekerjaan_ortu !== undefined ? (pekerjaan_ortu ? String(pekerjaan_ortu).trim() : '-') : siswaList[idx].pekerjaan_ortu,
       alamat: alamat !== undefined ? (alamat ? String(alamat).trim() : '-') : siswaList[idx].alamat,
       sekolah_asal: sekolah_asal !== undefined ? (sekolah_asal ? String(sekolah_asal).trim() : '-') : siswaList[idx].sekolah_asal,
     };
-    res.json({ success: true, message: 'Data siswa berhasil diperbarui' });
+    res.json({ success: true, data: siswaList[idx], message: 'Data siswa berhasil diperbarui' });
   });
 
   router.delete('/siswa/:id', requireRole('admin', 'staff'), (req, res) => {
+    const idx = siswaList.findIndex(s => s.id === req.params.id);
+    if (idx === -1) return res.status(404).json({ success: false, error: 'Siswa tidak ditemukan' });
+    const force = req.query.force === 'true';
+    const hasHistory =
+      absensiPiketList.some(a => a.studentId === req.params.id) ||
+      absensiMapelList.some(a => a.studentId === req.params.id);
+
+    if (!force && hasHistory) {
+      siswaList[idx] = { ...siswaList[idx], status: 'nonaktif' };
+      return res.json({
+        success: true,
+        archived: true,
+        message: 'Siswa memiliki riwayat absensi, status diubah menjadi Nonaktif agar data kehadiran tetap aman.',
+      });
+    }
+
     siswaList = siswaList.filter(s => s.id !== req.params.id);
-    res.json({ success: true, message: 'Siswa berhasil dihapus' });
+    res.json({ success: true, archived: false, message: 'Siswa berhasil dihapus permanen.' });
   });
 
   // --- Kelas ---
@@ -1102,6 +1517,7 @@ export function createMockApiRouter() {
     const { name, grade, major, teacherId } = req.body || {};
     const trimmedName = (name || '').trim();
     if (!trimmedName) return res.status(400).json({ success: false, error: 'Nama kelas wajib diisi' });
+    const oldName = kelasList[idx].name;
     const teacher = teacherId ? guruList.find(g => g.id === teacherId) : null;
     const updated = {
       ...kelasList[idx],
@@ -1112,6 +1528,12 @@ export function createMockApiRouter() {
       teacherName: teacher ? teacher.name : '-',
     };
     kelasList[idx] = updated;
+    if (oldName !== trimmedName) {
+      jadwalList = jadwalList.map(j => (j.class === oldName ? { ...j, class: trimmedName } : j));
+      absensiMapelList = absensiMapelList.map(a => (a.class === oldName ? { ...a, class: trimmedName } : a));
+      absensiPiketList = absensiPiketList.map(a => (a.class === oldName ? { ...a, class: trimmedName } : a));
+      siswaList = siswaList.map(s => (s.class === oldName ? { ...s, class: trimmedName } : s));
+    }
     res.json({ success: true, data: updated, message: 'Kelas berhasil diperbarui' });
   });
 
@@ -1233,41 +1655,66 @@ export function createMockApiRouter() {
   router.post('/absensi-mapel', requireRole('admin', 'guru'), (req, res) => {
     const { records } = req.body || {};
     if (!Array.isArray(records) || records.length === 0) {
-      return res.json({ success: false, error: 'Data absensi kosong' });
+      return res.status(400).json({ success: false, error: 'Data absensi kosong' });
     }
+    const nowIso = new Date().toISOString();
+    const recordedByUserId = req.authUser?.id || null;
+    const recordedByName = req.authUser?.name || null;
+    let savedCount = 0;
     for (const record of records) {
+      if (!record.studentId || !record.date) continue;
+      if (!VALID_NON_EMPTY_ATTENDANCE.has(record.status)) continue;
+      const student = siswaList.find(s => s.id === record.studentId);
+      if (!student) continue;
       const mapelId = record.mapelId || record.subjectId;
-      const guruId = record.guruId || record.teacherId || req.authUser?.teacherId || 'g001';
-      const kelasName = record.class || record.kelasName || '-';
+      const guruId =
+        req.authUser.role === 'guru' && req.authUser.teacherId
+          ? req.authUser.teacherId
+          : (record.guruId || record.teacherId || req.authUser?.teacherId || 'g001');
+      const kelasName = record.class || record.kelasName || student.class || '-';
+      const kelasObj = kelasList.find(k => k.id === record.kelasId || k.name === kelasName);
       const idx = absensiMapelList.findIndex(
         a => a.studentId === record.studentId && a.mapelId === mapelId && a.date === record.date && Number(a.jamKe) === Number(record.jamKe)
       );
-      const student = siswaList.find(s => s.id === record.studentId);
       const mapel = mapelList.find(m => m.id === mapelId || m.nama === record.subject);
       const guru = guruList.find(g => g.id === guruId);
+      if (!guru) continue;
       const item = {
         id: idx !== -1 ? absensiMapelList[idx].id : newId(),
         studentId: record.studentId,
-        studentName: student?.name || record.studentName || '-',
+        studentName: student.name,
         mapelId: mapel?.id || mapelId,
         subject: mapel?.nama || record.subject || '-',
-        guruId,
-        teacherName: guru?.name || record.teacherName || req.authUser?.name || '-',
-        class: kelasName,
+        guruId: guru.id,
+        teacherName: guru.name,
+        kelasId: kelasObj?.id || null,
+        class: kelasObj?.name || kelasName,
+        recordedByUserId,
+        recordedByName: recordedByName || guru.name,
         date: record.date,
         jamKe: Number(record.jamKe) || 1,
         status: record.status,
+        updatedAt: nowIso,
       };
       if (idx !== -1) absensiMapelList[idx] = item;
       else absensiMapelList.push(item);
+      savedCount++;
     }
-    res.json({ success: true, message: 'Absensi mapel berhasil disimpan.' });
+    if (savedCount === 0) {
+      return res.status(400).json({ success: false, error: 'Tidak ada data absensi mapel yang valid.' });
+    }
+    res.json({ success: true, savedCount, message: 'Absensi mapel berhasil disimpan.' });
   });
 
-  router.get('/absensi-mapel', (req, res) => {
-    const { kelas, mapel, date, month } = req.query;
+  router.get('/absensi-mapel', requireAuth, (req, res) => {
+    const { kelas, mapel, date, month, studentId } = req.query;
     let list = [...absensiMapelList];
-    if (kelas) list = list.filter(a => a.class === kelas);
+    if (req.authUser.role === 'wali_murid') {
+      list = list.filter(a => a.studentId === (req.authUser.studentId || '__no_linked_student__'));
+    } else {
+      if (studentId) list = list.filter(a => a.studentId === studentId);
+      if (kelas) list = list.filter(a => a.class === kelas);
+    }
     if (mapel) list = list.filter(a => a.mapelId === mapel || a.subject === mapel);
     if (date) list = list.filter(a => a.date === date);
     if (month) list = list.filter(a => (a.date || '').startsWith(month));
@@ -1275,7 +1722,7 @@ export function createMockApiRouter() {
     res.json(list);
   });
 
-  router.get('/absensi-mapel/rekap', (req, res) => {
+  router.get('/absensi-mapel/rekap', requireRole('admin', 'guru', 'staff', 'kepsek'), (req, res) => {
     const { kelas, mapel, month } = req.query;
     if (!kelas || !month) {
       return res.json({ success: false, error: 'Parameter kelas dan month wajib' });
@@ -1342,7 +1789,7 @@ export function createMockApiRouter() {
     const siswaBolos = absensiPiketList.filter(a => a.statusPagi === 'hadir' && a.statusSore === 'alpha').length;
 
     res.json({
-      totalStudents: siswaList.length,
+      totalStudents: siswaList.filter(s => (s.status || 'aktif') === 'aktif').length,
       totalTeachers: guruList.length,
       totalClasses: kelasList.length,
       todayScheduleCount: todaySchedule.length,

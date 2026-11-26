@@ -7,11 +7,14 @@
    - Cache-First only for hashed production /assets/ and static icons/images
    ============================================================ */
 
-const CACHE_NAME = 'sia-smk-mu4ra-v4';
+const CACHE_NAME = 'sia-smk-mu4ra-v5';
 
 const STATIC_ASSETS = [
   '/manifest.json',
   '/favicon.svg',
+  '/pwa-192x192.png',
+  '/pwa-512x512.png',
+  '/apple-touch-icon.png',
 ];
 
 self.addEventListener('message', (event) => {

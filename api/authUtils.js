@@ -1,8 +1,16 @@
 import crypto from 'crypto';
+import { promisify } from 'util';
+
+const scryptAsync = promisify(crypto.scrypt);
 
 // Session signing key: read from server env or fall back to an ephemeral in-memory random key
+if (process.env.NODE_ENV === 'production' && !process.env.JWT_SECRET) {
+  console.warn('[SIA Security] WARNING: JWT_SECRET belum diset di environment production. Set JWT_SECRET agar sesi guru tidak terputus antar-instance serverless.');
+}
 const SESSION_SECRET = process.env.JWT_SECRET || crypto.randomBytes(32).toString('hex');
-const TOKEN_TTL_SECONDS = 60 * 60 * 12; // 12 hours
+export const SESSION_COOKIE_NAME = 'sia_session';
+const SHORT_TOKEN_TTL_SECONDS = 60 * 60 * 12; // 12 hours (non-persistent session)
+const REMEMBER_TOKEN_TTL_SECONDS = 60 * 60 * 24 * 30; // 30 days (PWA persistent session)
 
 const VALID_ROLES = new Set(['admin', 'guru', 'staff', 'kepsek', 'wali_murid']);
 
@@ -52,6 +60,42 @@ export function verifyPassword(password, stored) {
   return { valid, needsRehash: valid };
 }
 
+/**
+ * Non-blocking scrypt password hash (offloaded to Node libuv threadpool
+ * so concurrent logins never block the event loop).
+ */
+export async function hashPasswordAsync(password) {
+  const salt = crypto.randomBytes(16).toString('hex');
+  const derived = await scryptAsync(String(password), salt, 64);
+  return `scrypt$${salt}$${derived.toString('hex')}`;
+}
+
+/**
+ * Non-blocking scrypt password verification with legacy plaintext upgrade detection.
+ */
+export async function verifyPasswordAsync(password, stored) {
+  if (!password || !stored) return { valid: false, needsRehash: false };
+
+  if (isHashedPassword(stored)) {
+    const [, salt, hashHex] = stored.split('$');
+    try {
+      const derived = await scryptAsync(String(password), salt, 64);
+      const expected = Buffer.from(hashHex, 'hex');
+      if (derived.length !== expected.length) return { valid: false, needsRehash: false };
+      const valid = crypto.timingSafeEqual(derived, expected);
+      return { valid, needsRehash: false };
+    } catch {
+      return { valid: false, needsRehash: false };
+    }
+  }
+
+  const a = Buffer.from(String(password));
+  const b = Buffer.from(String(stored));
+  if (a.length !== b.length) return { valid: false, needsRehash: false };
+  const valid = crypto.timingSafeEqual(a, b);
+  return { valid, needsRehash: valid };
+}
+
 function base64UrlEncode(input) {
   return Buffer.from(input)
     .toString('base64')
@@ -66,20 +110,126 @@ function base64UrlDecode(str) {
 }
 
 /**
- * Sign a compact HS256 JWT token.
+ * Compute deterministic capability flags from user role, picket duty flag,
+ * and homeroom classes derived from Kelas.teacherId.
  */
-export function signToken(user) {
+export function buildUserCapabilities(user, homeroomClasses = []) {
+  const role = user?.role || '';
+  const isAdmin = role === 'admin';
+  const isStaff = role === 'staff';
+  const isKepsek = role === 'kepsek';
+  const isGuru = role === 'guru';
+  const isGuardian = role === 'wali_murid';
+  const isPiket = isGuru && Boolean(user?.isPiket);
+  const safeHomeroom = Array.isArray(homeroomClasses) ? homeroomClasses : [];
+  const hasHomeroom = safeHomeroom.length > 0;
+
+  return {
+    canAccessAdmin: isAdmin,
+    canManageUsers: isAdmin,
+    canInputPiket: isAdmin || isStaff || isPiket,
+    canInputMapel: isAdmin || isGuru,
+    canMonitorSchool: isAdmin || isStaff || isKepsek,
+    canMonitorHomeroom: isAdmin || isStaff || isKepsek || (isGuru && hasHomeroom),
+    canMonitorOwnChild: isGuardian && Boolean(user?.studentId),
+  };
+}
+
+/**
+ * Compute student attendance early-warning tier (hijau / kuning / merah)
+ * from Piket and Mapel attendance summaries.
+ */
+export function computeAttendanceRiskTier({ piketSummary = {}, mapelSummary = {} } = {}) {
+  const piketTotal = Number(piketSummary.totalHari) || 0;
+  const piketHadir = Number(piketSummary.hadir) || 0;
+  const piketAlpha = Number(piketSummary.alpha) || 0;
+  const piketBolos = Number(piketSummary.bolos) || 0;
+
+  const mapelTotal = Number(mapelSummary.totalSesi) || 0;
+  const mapelAlpha = Number(mapelSummary.alpha) || 0;
+  const mapelRate = mapelTotal > 0 ? Number(mapelSummary.persentase || 0) : null;
+  const piketRate = piketTotal > 0 ? Math.round((piketHadir / piketTotal) * 100) : null;
+
+  if (piketTotal === 0 && mapelTotal === 0) {
+    return {
+      tier: 'hijau',
+      label: 'Belum Ada Catatan',
+      rate: 100,
+      alphaTotal: 0,
+      bolosTotal: 0,
+      reason: 'Belum ada catatan ketidakhadiran pada periode ini.',
+    };
+  }
+
+  const rates = [piketRate, mapelRate].filter(r => r !== null);
+  const combinedRate = rates.length > 0
+    ? Math.round(rates.reduce((sum, r) => sum + r, 0) / rates.length)
+    : 100;
+  const alphaTotal = piketAlpha + mapelAlpha;
+
+  if (combinedRate < 85 || alphaTotal >= 3 || piketBolos >= 2) {
+    return {
+      tier: 'merah',
+      label: 'Perlu Konseling',
+      rate: combinedRate,
+      alphaTotal,
+      bolosTotal: piketBolos,
+      reason: piketBolos >= 2
+        ? `Terdeteksi ${piketBolos}x indikasi bolos (hadir pagi, alpha sore).`
+        : alphaTotal >= 3
+          ? `Tercatat ${alphaTotal}x alpha tanpa keterangan.`
+          : `Persentase kehadiran ${combinedRate}% (di bawah ambang 85%).`,
+    };
+  }
+
+  if (combinedRate < 95 || alphaTotal >= 1 || piketBolos >= 1) {
+    return {
+      tier: 'kuning',
+      label: 'Perlu Pemantauan',
+      rate: combinedRate,
+      alphaTotal,
+      bolosTotal: piketBolos,
+      reason: piketBolos >= 1
+        ? `Terdapat ${piketBolos}x indikasi bolos yang perlu dikonfirmasi.`
+        : alphaTotal >= 1
+          ? `Terdapat ${alphaTotal}x catatan alpha.`
+          : `Persentase kehadiran ${combinedRate}% (di bawah 95%).`,
+    };
+  }
+
+  return {
+    tier: 'hijau',
+    label: 'Kondisi Baik',
+    rate: combinedRate,
+    alphaTotal,
+    bolosTotal: piketBolos,
+    reason: `Kehadiran stabil di angka ${combinedRate}%.`,
+  };
+}
+
+/**
+ * Sign a compact HS256 JWT token carrying role, picket flag, and homeroom bindings.
+ */
+export function signToken(user, { rememberMe = true } = {}) {
   const now = Math.floor(Date.now() / 1000);
+  const ttl = rememberMe ? REMEMBER_TOKEN_TTL_SECONDS : SHORT_TOKEN_TTL_SECONDS;
   const header = base64UrlEncode(JSON.stringify({ alg: 'HS256', typ: 'JWT' }));
+  const homeroomClasses = Array.isArray(user.homeroomClasses)
+    ? user.homeroomClasses.map(c => ({ id: c.id, name: c.name }))
+    : [];
+  const isPiket = user.role === 'guru' ? Boolean(user.isPiket) : false;
   const payload = base64UrlEncode(JSON.stringify({
     sub: user.id,
     username: user.username,
     name: user.name,
     role: user.role,
+    isPiket,
     teacherId: user.teacherId || null,
     studentId: user.studentId || null,
+    homeroomClasses,
+    rm: Boolean(rememberMe),
     iat: now,
-    exp: now + TOKEN_TTL_SECONDS,
+    exp: now + ttl,
   }));
   const signature = base64UrlEncode(
     crypto.createHmac('sha256', SESSION_SECRET).update(`${header}.${payload}`).digest()
@@ -88,7 +238,7 @@ export function signToken(user) {
 }
 
 /**
- * Verify compact HS256 JWT token and return payload or null.
+ * Verify compact HS256 JWT token and return normalized auth user payload or null.
  */
 export function verifyToken(token) {
   if (!token || typeof token !== 'string') return null;
@@ -110,21 +260,110 @@ export function verifyToken(token) {
     const now = Math.floor(Date.now() / 1000);
     if (!decoded.exp || decoded.exp < now) return null;
 
-    return {
+    const homeroomClasses = Array.isArray(decoded.homeroomClasses) ? decoded.homeroomClasses : [];
+    const baseUser = {
       id: decoded.sub,
       username: decoded.username,
       name: decoded.name,
       role: decoded.role,
+      isPiket: decoded.role === 'guru' ? Boolean(decoded.isPiket) : false,
       teacherId: decoded.teacherId || null,
       studentId: decoded.studentId || null,
+      homeroomClasses,
+    };
+
+    return {
+      ...baseUser,
+      capabilities: buildUserCapabilities(baseUser, homeroomClasses),
     };
   } catch {
     return null;
   }
 }
 
+function parseCookies(cookieHeader) {
+  const result = {};
+  if (!cookieHeader || typeof cookieHeader !== 'string') return result;
+  for (const part of cookieHeader.split(';')) {
+    const idx = part.indexOf('=');
+    if (idx === -1) continue;
+    const key = part.slice(0, idx).trim();
+    const val = part.slice(idx + 1).trim();
+    if (key) {
+      try {
+        result[key] = decodeURIComponent(val);
+      } catch {
+        result[key] = val;
+      }
+    }
+  }
+  return result;
+}
+
+function isHttpsRequest(req) {
+  const forwardedProto = String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim().toLowerCase();
+  return Boolean(req.secure || forwardedProto === 'https');
+}
+
 /**
- * Express middleware: parse Authorization Bearer token if present.
+ * Emit HttpOnly session cookie (with Secure; SameSite=None; Partitioned over HTTPS
+ * for iframe + installed PWA compatibility, or HttpOnly; SameSite=Lax on local HTTP).
+ */
+export function setSessionCookie(req, res, token, { rememberMe = true } = {}) {
+  const isHttps = isHttpsRequest(req);
+  const parts = [
+    `${SESSION_COOKIE_NAME}=${encodeURIComponent(token)}`,
+    'Path=/',
+    'HttpOnly',
+  ];
+  if (rememberMe) {
+    parts.push(`Max-Age=${REMEMBER_TOKEN_TTL_SECONDS}`);
+  }
+  if (isHttps) {
+    parts.push('Secure', 'SameSite=None', 'Partitioned');
+  } else {
+    parts.push('SameSite=Lax');
+  }
+  res.append('Set-Cookie', parts.join('; '));
+}
+
+export function clearSessionCookie(req, res) {
+  const isHttps = isHttpsRequest(req);
+  const parts = [
+    `${SESSION_COOKIE_NAME}=`,
+    'Path=/',
+    'HttpOnly',
+    'Max-Age=0',
+    'Expires=Thu, 01 Jan 1970 00:00:00 GMT',
+  ];
+  if (isHttps) {
+    parts.push('Secure', 'SameSite=None', 'Partitioned');
+  } else {
+    parts.push('SameSite=Lax');
+  }
+  res.append('Set-Cookie', parts.join('; '));
+}
+
+function passesCookieCsrfCheck(req) {
+  const method = String(req.method || 'GET').toUpperCase();
+  if (method === 'GET' || method === 'HEAD' || method === 'OPTIONS') return true;
+  if (req.headers['x-requested-with']) return true;
+  const origin = req.headers.origin;
+  const host = String(req.headers['x-forwarded-host'] || req.headers.host || '').split(',')[0].trim().toLowerCase();
+  if (origin && host) {
+    try {
+      const originHost = new URL(origin).host.toLowerCase();
+      if (originHost === host) return true;
+    } catch {
+      return false;
+    }
+  }
+  return false;
+}
+
+/**
+ * Express middleware: parse Authorization Bearer token first, then fall back to
+ * signed HttpOnly session cookie (with CSRF check on cookie-authenticated mutations).
  */
 export function attachAuth(req, res, next) {
   const authHeader = req.headers.authorization || '';
@@ -133,6 +372,24 @@ export function attachAuth(req, res, next) {
     const user = verifyToken(token);
     if (user) {
       req.authUser = user;
+      req.authViaCookie = false;
+      return next();
+    }
+  }
+
+  const cookies = parseCookies(req.headers.cookie);
+  const cookieToken = cookies[SESSION_COOKIE_NAME];
+  if (cookieToken) {
+    const user = verifyToken(cookieToken);
+    if (user) {
+      if (!passesCookieCsrfCheck(req)) {
+        return res.status(403).json({
+          success: false,
+          error: 'Permintaan ditolak oleh verifikasi asal sesi.',
+        });
+      }
+      req.authUser = user;
+      req.authViaCookie = true;
     }
   }
   next();
@@ -158,6 +415,75 @@ export function requireRole(...allowedRoles) {
     }
     if (!allowedRoles.includes(req.authUser.role)) {
       return res.status(403).json({ success: false, error: 'Anda tidak memiliki izin untuk melakukan tindakan ini.' });
+    }
+    next();
+  };
+}
+
+/**
+ * Express middleware: enforce capability-based access control.
+ */
+export function requireCapability(...requiredCapabilities) {
+  return (req, res, next) => {
+    if (!req.authUser) {
+      return res.status(401).json({ success: false, error: 'Autentikasi diperlukan. Silakan login kembali.' });
+    }
+    const caps = req.authUser.capabilities || buildUserCapabilities(req.authUser, req.authUser.homeroomClasses);
+    const allowed = requiredCapabilities.some(cap => Boolean(caps[cap]));
+    if (!allowed) {
+      return res.status(403).json({ success: false, error: 'Akun Anda tidak memiliki hak tugas untuk fitur ini.' });
+    }
+    next();
+  };
+}
+
+/**
+ * Express middleware: allow only Admin, Staff, or Teachers explicitly assigned as Guru Piket.
+ */
+export function requirePiketAccess(req, res, next) {
+  if (!req.authUser) {
+    return res.status(401).json({ success: false, error: 'Autentikasi diperlukan. Silakan login kembali.' });
+  }
+  const caps = req.authUser.capabilities || buildUserCapabilities(req.authUser, req.authUser.homeroomClasses);
+  if (!caps.canInputPiket) {
+    return res.status(403).json({
+      success: false,
+      error: 'Akses ditolak. Hanya Guru dengan tugas Piket, Staff, atau Admin yang dapat menginput absensi piket.',
+    });
+  }
+  next();
+}
+
+/**
+ * Express middleware: enforce strict ownership when reading a single student's records.
+ * Guardians (wali_murid) may ONLY inspect their own linked studentId.
+ */
+export function requireStudentReadAccess(req, res, next) {
+  if (!req.authUser) {
+    return res.status(401).json({ success: false, error: 'Autentikasi diperlukan. Silakan login kembali.' });
+  }
+  if (req.authUser.role === 'wali_murid') {
+    const targetId = req.params.id || req.query.studentId;
+    if (!req.authUser.studentId || req.authUser.studentId !== targetId) {
+      return res.status(403).json({
+        success: false,
+        error: 'Akses ditolak. Wali murid hanya dapat melihat data kehadiran anak sendiri.',
+      });
+    }
+  }
+  next();
+}
+
+/**
+ * Express middleware: explicitly deny specific roles from an endpoint.
+ */
+export function denyRoles(...blockedRoles) {
+  return (req, res, next) => {
+    if (!req.authUser) {
+      return res.status(401).json({ success: false, error: 'Autentikasi diperlukan. Silakan login kembali.' });
+    }
+    if (blockedRoles.includes(req.authUser.role)) {
+      return res.status(403).json({ success: false, error: 'Anda tidak memiliki izin untuk mengakses data ini.' });
     }
     next();
   };
@@ -204,7 +530,144 @@ export function createCorsOptions() {
         return callback(null, false);
       }
     },
-    credentials: false,
-    allowedHeaders: ['Content-Type', 'Authorization'],
+    credentials: true,
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
   };
 }
+
+export const DEFAULT_SCHOOL_GEOFENCE = {
+  latitude: -6.5194526,
+  longitude: 110.7783316,
+  radiusMeters: 250,
+};
+
+export function calculateHaversineMeters(lat1, lon1, lat2, lon2) {
+  const R = 6371000;
+  const dLat = ((lat2 - lat1) * Math.PI) / 180;
+  const dLon = ((lon2 - lon1) * Math.PI) / 180;
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos((lat1 * Math.PI) / 180) *
+      Math.cos((lat2 * Math.PI) / 180) *
+      Math.sin(dLon / 2) ** 2;
+  return Math.round(R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)));
+}
+
+export function validateGeofenceCoords(coords) {
+  if (!coords || typeof coords !== 'object') return null;
+  const rawLat = coords.latitude ?? coords.lat;
+  const rawLng = coords.longitude ?? coords.lng;
+  const latitude = Number(rawLat);
+  const longitude = Number(rawLng);
+  if (
+    !Number.isFinite(latitude) ||
+    !Number.isFinite(longitude) ||
+    latitude < -90 ||
+    latitude > 90 ||
+    longitude < -180 ||
+    longitude > 180
+  ) {
+    return null;
+  }
+  return { latitude, longitude };
+}
+
+export function validateGeofenceConfig(input) {
+  const coords = validateGeofenceCoords(input);
+  if (!coords) return null;
+  const radiusMeters = Math.round(Number(input?.radiusMeters));
+  if (!Number.isFinite(radiusMeters) || radiusMeters < 20 || radiusMeters > 2000) {
+    return null;
+  }
+  return {
+    latitude: coords.latitude,
+    longitude: coords.longitude,
+    radiusMeters,
+  };
+}
+
+export function formatJakartaTimeHHMM(date = new Date()) {
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Asia/Jakarta',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).formatToParts(date);
+  const hour = parts.find(p => p.type === 'hour')?.value || '00';
+  const minute = parts.find(p => p.type === 'minute')?.value || '00';
+  return `${hour}:${minute}`;
+}
+
+/**
+ * Extract client IP behind reverse proxy (Vercel / Cloud Run / Nginx).
+ */
+export function getClientIp(req) {
+  const xff = req.headers['x-forwarded-for'];
+  if (typeof xff === 'string' && xff.trim()) {
+    return xff.split(',')[0].trim();
+  }
+  return req.ip || req.socket?.remoteAddress || 'unknown';
+}
+
+/**
+ * Lightweight, memory-bounded sliding-window rate limiter middleware.
+ * Protects login & public submission routes without external Redis dependency.
+ */
+export function createRateLimiter({
+  windowMs = 15 * 60 * 1000,
+  max = 15,
+  maxBuckets = 2000,
+  keyGenerator = (req) => getClientIp(req),
+  message = 'Terlalu banyak percobaan. Silakan tunggu beberapa menit lalu coba lagi.',
+} = {}) {
+  const buckets = new Map();
+
+  return (req, res, next) => {
+    const now = Date.now();
+    const key = String(keyGenerator(req) || 'unknown');
+
+    // Prune expired entries opportunistically when bucket count grows
+    if (buckets.size >= maxBuckets) {
+      for (const [k, timestamps] of buckets.entries()) {
+        const active = timestamps.filter(ts => now - ts < windowMs);
+        if (active.length === 0) buckets.delete(k);
+        else buckets.set(k, active);
+      }
+      if (buckets.size >= maxBuckets) {
+        const oldestKey = buckets.keys().next().value;
+        if (oldestKey) buckets.delete(oldestKey);
+      }
+    }
+
+    const existing = buckets.get(key) || [];
+    const recent = existing.filter(ts => now - ts < windowMs);
+
+    if (recent.length >= max) {
+      const oldestTs = recent[0] || now;
+      const retryAfterSec = Math.max(1, Math.ceil((windowMs - (now - oldestTs)) / 1000));
+      res.setHeader('Retry-After', String(retryAfterSec));
+      return res.status(429).json({
+        success: false,
+        error: message,
+        retryAfterSeconds: retryAfterSec,
+      });
+    }
+
+    recent.push(now);
+    buckets.set(key, recent);
+    next();
+  };
+}
+
+/**
+ * Baseline HTTP security headers compatible with embedded preview iframes & PWA geolocation.
+ * Intentionally omits X-Frame-Options so iframe embeds remain functional.
+ */
+export function securityHeadersMiddleware(req, res, next) {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  res.setHeader('Permissions-Policy', 'geolocation=(self), camera=(), microphone=()');
+  next();
+}
+
+

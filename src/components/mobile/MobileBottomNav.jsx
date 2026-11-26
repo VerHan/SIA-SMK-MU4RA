@@ -4,6 +4,38 @@
    ============================================================ */
 
 import { useNavigate, useLocation } from 'react-router-dom';
+import { useAuth } from '../../hooks/useAuth';
+
+const GUARDIAN_NAV_ITEMS = [
+  {
+    key: 'monitoring-anak',
+    label: 'Pantau Anak',
+    path: '/app/monitoring-anak',
+    icon: (active) => (
+      <svg width="20" height="20" viewBox="0 0 24 24" fill={active ? '#2563EB' : 'none'}
+        stroke={active ? '#2563EB' : '#64748B'} strokeWidth="2"
+        strokeLinecap="round" strokeLinejoin="round">
+        <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
+        <circle cx="9" cy="7" r="4" />
+        <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
+        <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+      </svg>
+    ),
+  },
+  {
+    key: 'profil',
+    label: 'Profil',
+    path: '/app/profil',
+    icon: (active) => (
+      <svg width="20" height="20" viewBox="0 0 24 24" fill={active ? '#2563EB' : 'none'}
+        stroke={active ? '#2563EB' : '#64748B'} strokeWidth="2"
+        strokeLinecap="round" strokeLinejoin="round">
+        <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
+        <circle cx="12" cy="7" r="4" />
+      </svg>
+    ),
+  },
+];
 
 const NAV_ITEMS = [
   {
@@ -65,6 +97,8 @@ const NAV_ITEMS = [
 export default function MobileBottomNav() {
   const navigate = useNavigate();
   const location = useLocation();
+  const { isGuardian } = useAuth();
+  const items = isGuardian ? GUARDIAN_NAV_ITEMS : NAV_ITEMS;
 
   return (
     <nav
@@ -87,7 +121,7 @@ export default function MobileBottomNav() {
         alignItems: 'center',
       }}
     >
-      {NAV_ITEMS.map(item => {
+      {items.map(item => {
         const isActive = location.pathname === item.path ||
           (item.path !== '/app/home' && location.pathname.startsWith(item.path));
 

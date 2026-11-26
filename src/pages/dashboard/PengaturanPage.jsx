@@ -39,7 +39,18 @@ export default function PengaturanPage() {
     lng: settings.geofence.longitude,
   });
   const [radius, setRadius] = useState(settings.geofence.radiusMeters);
+  const [savingGeofence, setSavingGeofence] = useState(false);
   const [toast, setToast] = useState(null);
+
+  useEffect(() => {
+    if (settings?.geofence) {
+      setPosition({
+        lat: settings.geofence.latitude,
+        lng: settings.geofence.longitude,
+      });
+      setRadius(settings.geofence.radiusMeters);
+    }
+  }, [settings?.geofence?.latitude, settings?.geofence?.longitude, settings?.geofence?.radiusMeters]);
 
   // --- KEEP ALIVE STATES ---
   const [pingHistory, setPingHistory] = useState([]);
@@ -110,13 +121,19 @@ export default function PengaturanPage() {
     }
   };
 
-  const handleSave = () => {
-    updateGeofence({
+  const handleSave = async () => {
+    setSavingGeofence(true);
+    const res = await updateGeofence({
       latitude: position.lat,
       longitude: position.lng,
       radiusMeters: Number(radius),
     });
-    setToast({ type: 'success', message: 'Pengaturan Geofence berhasil disimpan.' });
+    setSavingGeofence(false);
+    if (res?.success) {
+      setToast({ type: 'success', message: res.message || 'Pengaturan Geofence berhasil disimpan untuk semua perangkat.' });
+    } else {
+      setToast({ type: 'error', message: res?.error || 'Gagal menyimpan pengaturan Geofence.' });
+    }
   };
 
   return (
@@ -211,7 +228,7 @@ export default function PengaturanPage() {
             </div>
           </div>
 
-          <Button fullWidth onClick={handleSave}>
+          <Button fullWidth onClick={handleSave} loading={savingGeofence}>
             💾 Simpan Pengaturan
           </Button>
 

@@ -163,6 +163,7 @@ export const DASHBOARD_NAV_ITEMS = [
     icon: 'clipboard-list',
     group: 'Guru',
     roles: [USER_ROLES.GURU, USER_ROLES.ADMIN],
+    requiredCapability: 'canInputPiket',
   },
   {
     label: 'Input Absen Mapel',
