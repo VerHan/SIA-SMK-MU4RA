@@ -1,69 +1,158 @@
 /* ============================================================
-   MobileNotifPage.jsx — Halaman Notifikasi
-   Section sudah siap, konten akan dikembangkan kemudian
+   MobileNotifPage.jsx — Notifikasi Real-Time dari Backend API
    ============================================================ */
 
-const DUMMY_NOTIF = [
-  { id: 1, icon: '📋', title: 'Jadwal UTS telah diperbarui', time: '5 menit lalu', read: false, color: '#7C3AED' },
-  { id: 2, icon: '✅', title: 'Absen berhasil dicatat — Senin, 19 Agustus 2024', time: '2 jam lalu', read: false, color: '#059669' },
-  { id: 3, icon: '📢', title: 'Rapat koordinasi guru hari Rabu pukul 13.00', time: '1 hari lalu', read: true, color: '#D97706' },
-  { id: 4, icon: '📌', title: 'Pengingat: Input nilai semester ganjil', time: '2 hari lalu', read: true, color: '#0891B2' },
-];
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { getNotifications, markAllNotificationsRead, markNotificationRead } from '../../services/api';
+
+const EVENT_STYLE = {
+  ALPHA_ALERT: { icon: '⚠️', color: '#DC2626', label: 'Alpha' },
+  BOLOS_ALERT: { icon: '🚨', color: '#D97706', label: 'Bolos' },
+  SYSTEM_TEST: { icon: '📡', color: '#2563EB', label: 'Sistem' },
+  GENERAL: { icon: '🔔', color: '#059669', label: 'Info' },
+};
 
 export default function MobileNotifPage() {
+  const queryClient = useQueryClient();
+
+  const { data: notifRes, isLoading } = useQuery({
+    queryKey: ['mobile-notifications'],
+    queryFn: () => getNotifications({ page: 1, limit: 30 }),
+  });
+
+  const markOneMutation = useMutation({
+    mutationFn: (id) => markNotificationRead(id),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['mobile-notifications'] }),
+  });
+
+  const markAllMutation = useMutation({
+    mutationFn: markAllNotificationsRead,
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['mobile-notifications'] }),
+  });
+
+  const items = notifRes?.data || [];
+  const unreadCount = Number(notifRes?.unreadCount) || 0;
+
   return (
     <div style={{ padding: '16px 20px', animation: 'fadeInUp 0.4s ease' }}>
-      <div style={{ marginBottom: '20px' }}>
-        <h2 style={{ fontSize: '20px', fontWeight: 700, color: '#0F172A', margin: 0 }}>
-          Notifikasi
-        </h2>
-        <p style={{ fontSize: '13px', color: '#64748B', margin: '4px 0 0' }}>
-          {DUMMY_NOTIF.filter(n => !n.read).length} notifikasi belum dibaca
-        </p>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '12px', marginBottom: '20px' }}>
+        <div>
+          <h2 style={{ fontSize: '20px', fontWeight: 700, color: '#0F172A', margin: 0 }}>
+            Notifikasi
+          </h2>
+          <p style={{ fontSize: '13px', color: '#64748B', margin: '4px 0 0' }}>
+            {unreadCount} notifikasi belum dibaca
+          </p>
+        </div>
+        {unreadCount > 0 && (
+          <button
+            type="button"
+            onClick={() => markAllMutation.mutate()}
+            disabled={markAllMutation.isPending}
+            style={{
+              padding: '7px 12px',
+              borderRadius: '10px',
+              border: '1px solid rgba(37, 99, 235, 0.25)',
+              background: '#EFF6FF',
+              color: '#1D4ED8',
+              fontSize: '12px',
+              fontWeight: 600,
+              cursor: 'pointer',
+            }}
+          >
+            Tandai Semua Dibaca
+          </button>
+        )}
       </div>
 
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-        {DUMMY_NOTIF.map(notif => (
-          <div key={notif.id} style={{
-            padding: '14px 16px',
-            borderRadius: '16px',
-            background: notif.read ? 'rgba(255, 255, 255, 0.8)' : 'rgba(124, 58, 237, 0.05)',
-            border: `1px solid ${notif.read ? 'rgba(0,0,0,0.06)' : 'rgba(124, 58, 237, 0.2)'}`,
-            boxShadow: '0 2px 8px rgba(0,0,0,0.02)',
-            display: 'flex',
-            alignItems: 'flex-start',
-            gap: '12px',
-          }}>
-            <div style={{
-              width: '40px', height: '40px', borderRadius: '12px', flexShrink: 0,
-              background: `${notif.color}22`,
-              border: `1px solid ${notif.color}44`,
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              fontSize: '18px',
-            }}>
-              {notif.icon}
-            </div>
-            <div style={{ flex: 1 }}>
-              <p style={{
-                fontSize: '13px', fontWeight: notif.read ? 500 : 700,
-                color: '#0F172A', margin: '0 0 4px',
-                lineHeight: 1.4,
-              }}>
-                {notif.title}
-              </p>
-              <p style={{ fontSize: '11px', color: '#64748B', margin: 0 }}>
-                {notif.time}
-              </p>
-            </div>
-            {!notif.read && (
-              <div style={{
-                width: '8px', height: '8px', borderRadius: '50%',
-                background: '#7C3AED', flexShrink: 0, marginTop: '4px',
-              }} />
-            )}
-          </div>
-        ))}
-      </div>
+      {isLoading ? (
+        <div style={{ padding: '24px', textAlign: 'center', color: '#64748B', fontSize: '13px' }}>
+          Memuat notifikasi terbaru...
+        </div>
+      ) : items.length === 0 ? (
+        <div style={{
+          padding: '32px 20px',
+          textAlign: 'center',
+          borderRadius: '16px',
+          background: '#FFFFFF',
+          border: '1px solid rgba(0,0,0,0.06)',
+          color: '#64748B',
+          fontSize: '13px',
+        }}>
+          Belum ada notifikasi untuk akun Anda.
+        </div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+          {items.map((notif) => {
+            const meta = EVENT_STYLE[notif.eventType] || EVENT_STYLE.GENERAL;
+            const isRead = Boolean(notif.readAt);
+            return (
+              <button
+                key={notif.id}
+                type="button"
+                onClick={() => {
+                  if (!isRead) markOneMutation.mutate(notif.id);
+                }}
+                style={{
+                  textAlign: 'left',
+                  width: '100%',
+                  padding: '14px 16px',
+                  borderRadius: '16px',
+                  background: isRead ? 'rgba(255, 255, 255, 0.85)' : 'rgba(37, 99, 235, 0.05)',
+                  border: `1px solid ${isRead ? 'rgba(0,0,0,0.06)' : 'rgba(37, 99, 235, 0.22)'}`,
+                  boxShadow: '0 2px 8px rgba(0,0,0,0.02)',
+                  display: 'flex',
+                  alignItems: 'flex-start',
+                  gap: '12px',
+                  cursor: isRead ? 'default' : 'pointer',
+                }}
+              >
+                <div style={{
+                  width: '40px',
+                  height: '40px',
+                  borderRadius: '12px',
+                  flexShrink: 0,
+                  background: `${meta.color}18`,
+                  border: `1px solid ${meta.color}40`,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  fontSize: '18px',
+                }}>
+                  {meta.icon}
+                </div>
+                <div style={{ flex: 1 }}>
+                  <p style={{
+                    fontSize: '13px',
+                    fontWeight: isRead ? 500 : 700,
+                    color: '#0F172A',
+                    margin: '0 0 4px',
+                    lineHeight: 1.4,
+                  }}>
+                    {notif.title}
+                  </p>
+                  <p style={{ fontSize: '12px', color: '#475569', margin: '0 0 6px', lineHeight: 1.45 }}>
+                    {notif.message}
+                  </p>
+                  <p style={{ fontSize: '11px', color: '#64748B', margin: 0 }}>
+                    {notif.createdAt ? new Date(notif.createdAt).toLocaleString('id-ID') : '-'}
+                  </p>
+                </div>
+                {!isRead && (
+                  <div style={{
+                    width: '8px',
+                    height: '8px',
+                    borderRadius: '50%',
+                    background: '#2563EB',
+                    flexShrink: 0,
+                    marginTop: '4px',
+                  }} />
+                )}
+              </button>
+            );
+          })}
+        </div>
+      )}
 
       <style>{`
         @keyframes fadeInUp {

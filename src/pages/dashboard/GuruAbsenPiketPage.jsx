@@ -1,7 +1,9 @@
 /* GuruAbsenPiketPage — Input Absen Piket Pagi/Sore & Rekap Bulanan */
 
 import { useState, useEffect, Fragment } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { getClasses, getStudents, getAttendance, saveAttendance, getAcademicYears } from '../../services/api';
+import { invalidateAttendanceQueries } from '../../hooks/useRealtimeSync';
 import Card from '../../components/ui/Card';
 import Table from '../../components/ui/Table';
 import Button from '../../components/ui/Button';
@@ -10,6 +12,7 @@ import Toast from '../../components/ui/Toast';
 import StudentDetailModal from '../../components/ui/StudentDetailModal';
 
 export default function GuruAbsenPiketPage() {
+  const queryClient = useQueryClient();
   const [activeTab, setActiveTab] = useState('input'); // 'input' | 'rekap'
 
   const [classes, setClasses] = useState([]);
@@ -103,10 +106,22 @@ export default function GuruAbsenPiketPage() {
     }
   }, [selectedClass, selectedDate, activeTab, reloadTick]);
 
+  const [rekapRealtimeTick, setRekapRealtimeTick] = useState(0);
+
+  useEffect(() => {
+    const handleRealtime = (event) => {
+      if (event?.detail?.type === 'attendance:updated' || event?.detail?.type === 'sync:resumed') {
+        setRekapRealtimeTick((t) => t + 1);
+      }
+    };
+    window.addEventListener('sia-realtime-update', handleRealtime);
+    return () => window.removeEventListener('sia-realtime-update', handleRealtime);
+  }, []);
+
   // Fetch Rekap Data
   useEffect(() => {
     if (selectedClass && activeTab === 'rekap') {
-      setRekapLoading(true);
+      if (rekapRealtimeTick === 0) setRekapLoading(true);
       Promise.all([
         getStudents(selectedClass),
         getAttendance(selectedClass, null, rekapMonth)
@@ -116,7 +131,7 @@ export default function GuruAbsenPiketPage() {
         setRekapLoading(false);
       });
     }
-  }, [selectedClass, rekapMonth, activeTab]);
+  }, [selectedClass, rekapMonth, activeTab, rekapRealtimeTick]);
 
   const handleStatusChange = (studentId, status) => {
     if (sesi === 'pagi') {
@@ -160,6 +175,7 @@ export default function GuruAbsenPiketPage() {
           return next;
         });
       }
+      invalidateAttendanceQueries(queryClient);
       setToast({ message: `Absensi sesi ${sesi} kelas ${selectedClass} berhasil disimpan!`, type: 'success' });
     } else if (result.conflict) {
       setConflictBanner(result.error || 'Data absensi sesi ini baru saja diubah oleh petugas lain.');

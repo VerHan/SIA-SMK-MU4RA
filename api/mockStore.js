@@ -17,6 +17,8 @@ import {
   MOCK_BEHAVIOR_RULES,
   MOCK_BEHAVIOR_POINTS,
   MOCK_DUTY_SCHEDULE,
+  MOCK_PAYMENTS,
+  MOCK_PRAYER_ATTENDANCE,
 } from '../src/services/mockData.js';
 import {
   buildUserCapabilities,
@@ -42,6 +44,34 @@ import {
   validateGeofenceCoords,
   validateNewPassword,
 } from './authUtils.js';
+import {
+  aggregatePiketSummary,
+  buildPaginationMeta,
+  buildRolloverPlan,
+  getAcademicYearDateRange,
+  parseGradeFromClassName,
+  parsePaginationParams,
+  suggestClassMapping,
+} from './academicRolloverUtils.js';
+import {
+  changePasswordSchema,
+  loginSchema,
+  userCreateSchema,
+  userUpdateSchema,
+  validateBody,
+} from './validators/schemas.js';
+import {
+  computePaymentStatus,
+  createAuditLogger,
+  createTokenVersionGuard,
+  DEFAULT_SCHOOL_CONFIG,
+  detectAttendanceAlerts,
+  dispatchWebhookPayload,
+} from './modules/auditService.js';
+import { createAuditRouter } from './modules/auditRouter.js';
+import { createSchoolConfigRouter } from './modules/schoolConfigRouter.js';
+import { createOperationsRouter } from './modules/operationsRouter.js';
+import { realtimeHub } from './modules/realtimeHub.js';
 
 const newId = () => crypto.randomUUID();
 const VALID_PPDB_STATUSES = new Set(['Menunggu Verifikasi', 'Diterima', 'Cadangan', 'Ditolak']);
@@ -61,6 +91,8 @@ export function createMockApiRouter() {
       name: u.name,
       role: u.role,
       isPiket: u.username === 'guru1' ? true : Boolean(u.isPiket),
+      isActive: true,
+      tokenVersion: 1,
       teacherId: u.teacherId || null,
       studentId: u.studentId || null,
       createdAt: new Date().toISOString(),
@@ -72,12 +104,22 @@ export function createMockApiRouter() {
       name: 'Siti Nurhaliza, S.Kom.',
       role: 'guru',
       isPiket: false,
+      isActive: true,
+      tokenVersion: 1,
       teacherId: 'g002',
       studentId: null,
       createdAt: new Date().toISOString(),
     },
   ];
   let users = seedUsers;
+
+  const tokenVersionGuard = createTokenVersionGuard({
+    lookupUserState: async (userId) => {
+      const u = users.find(x => x.id === userId);
+      return u ? { id: u.id, isActive: u.isActive !== false, tokenVersion: u.tokenVersion || 1 } : null;
+    },
+  });
+  router.use(tokenVersionGuard.middleware);
 
   let tahunAjarList = MOCK_ACADEMIC_YEARS.map(t => ({ ...t }));
   let guruList = MOCK_TEACHERS.map(g => ({ ...g }));
@@ -92,6 +134,88 @@ export function createMockApiRouter() {
     sekolah_asal: s.sekolah_asal || '-',
   }));
   let kelasList = MOCK_CLASSES.map(k => ({ ...k }));
+  const initialActiveYearId = tahunAjarList.find(t => t.isActive)?.id || tahunAjarList[0]?.id || 'ta001';
+  let riwayatKelasList = siswaList
+    .map(s => {
+      const cls = kelasList.find(k => k.name === s.class);
+      if (!cls) return null;
+      return { id: newId(), siswaId: s.id, kelasId: cls.id, tahunAjarId: initialActiveYearId };
+    })
+    .filter(Boolean);
+  let schoolConfig = { ...DEFAULT_SCHOOL_CONFIG };
+  let logAktivitasList = [
+    {
+      id: 'log-init-1',
+      userId: 'u001',
+      userName: 'Administrator Sekolah',
+      action: 'SYSTEM_INIT',
+      target: 'SIA SMK Muhammadiyah 04 Bangsri',
+      detail: 'Audit Trail, Pengaturan Sekolah Terpusat, dan proteksi sesi aktif.',
+      ipAddress: '127.0.0.1',
+      createdAt: new Date(Date.now() - 3600000).toISOString(),
+    },
+  ];
+  let notificationLogs = [
+    {
+      id: 'notif-seed-1',
+      recipientRole: 'guru',
+      recipientUserId: 'u002',
+      recipientName: 'Ahmad Fauzi, S.Pd.',
+      recipientPhone: '081234567890',
+      studentId: 's003',
+      studentName: 'Budi Santoso',
+      className: 'XI TKJ 1',
+      eventType: 'ALPHA_ALERT',
+      title: 'Ketidakhadiran Alpha: Budi Santoso (XI TKJ 1)',
+      message: '[SMK Muhammadiyah 04 Bangsri] Siswa Budi Santoso kelas XI TKJ 1 tercatat Alpha pada sesi piket. Mohon konfirmasi wali kelas.',
+      channel: 'in_app',
+      deliveryStatus: 'sent',
+      readAt: null,
+      createdAt: new Date(Date.now() - 7200000).toISOString(),
+    },
+    {
+      id: 'notif-seed-2',
+      recipientRole: 'admin',
+      recipientUserId: 'u001',
+      recipientName: 'Administrator Sekolah',
+      recipientPhone: null,
+      studentId: null,
+      studentName: null,
+      className: null,
+      eventType: 'GENERAL',
+      title: 'Backup Harian Otomatis Siap',
+      message: 'Jadwal backup database harian aktif pukul 02:00 WIB. Anda dapat mengunduh snapshot JSON kapan saja melalui Pengaturan.',
+      channel: 'in_app',
+      deliveryStatus: 'sent',
+      readAt: null,
+      createdAt: new Date(Date.now() - 1800000).toISOString(),
+    },
+  ];
+  let pembayaranList = (MOCK_PAYMENTS || []).map(p => ({ ...p }));
+  const todayJakartaStr = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Jakarta' }).format(new Date());
+  let absenSholatList = (MOCK_PRAYER_ATTENDANCE || []).map(p => ({
+    ...p,
+    date: p.date || todayJakartaStr,
+  }));
+
+  const logAudit = createAuditLogger({
+    writeLog: async ({ userId, userName, action, target, detail, ipAddress }) => {
+      const entry = {
+        id: newId(),
+        userId,
+        userName,
+        action,
+        target,
+        detail,
+        ipAddress,
+        createdAt: new Date().toISOString(),
+      };
+      logAktivitasList.unshift(entry);
+      if (logAktivitasList.length > 2000) logAktivitasList.length = 2000;
+      return entry;
+    },
+  });
+
   let mapelList = MOCK_SUBJECTS.map(m => ({ ...m }));
   let kelompokMapelList = ['Normatif', 'Adaptif', 'Produktif'];
   let jurusanList = [
@@ -105,9 +229,48 @@ export function createMockApiRouter() {
   let masterSesiList = MOCK_TIME_SLOTS.map((s, idx) => ({ id: `sesi-${idx + 1}`, order: idx, ...s }));
   let kalenderList = MOCK_ACADEMIC_CALENDAR.map(k => ({ ...k }));
   let jadwalList = MOCK_SCHEDULE.map(j => ({ ...j }));
-  let absensiPiketList = MOCK_ATTENDANCE.map(a => ({ ...a, updatedAt: a.updatedAt || new Date().toISOString() }));
+  let absensiPiketList = MOCK_ATTENDANCE.map(a => ({
+    ...a,
+    tahunAjarId: a.tahunAjarId || initialActiveYearId,
+    updatedAt: a.updatedAt || new Date().toISOString(),
+  }));
   let absensiGuruList = MOCK_TEACHER_ATTENDANCE.map(a => ({ ...a }));
   let absensiMapelList = [];
+
+  const getActiveYear = () => tahunAjarList.find(t => t.isActive) || tahunAjarList[0] || null;
+  const resolveStudentClassForYear = (student, yearId) => {
+    if (yearId && yearId !== 'all') {
+      const enr = riwayatKelasList.find(r => r.siswaId === student.id && r.tahunAjarId === yearId);
+      if (enr) {
+        const cls = kelasList.find(k => k.id === enr.kelasId);
+        return { className: cls?.name || '-', kelasId: cls?.id || null, grade: cls?.grade || null, enrolled: true };
+      }
+      return { className: '-', kelasId: null, grade: null, enrolled: false };
+    }
+    const active = getActiveYear();
+    const enr = active
+      ? riwayatKelasList.find(r => r.siswaId === student.id && r.tahunAjarId === active.id)
+      : riwayatKelasList.find(r => r.siswaId === student.id);
+    if (enr) {
+      const cls = kelasList.find(k => k.id === enr.kelasId);
+      return { className: cls?.name || student.class || '-', kelasId: cls?.id || null, grade: cls?.grade || null, enrolled: true };
+    }
+    const fallbackCls = kelasList.find(k => k.name === student.class);
+    return {
+      className: student.class || '-',
+      kelasId: fallbackCls?.id || null,
+      grade: fallbackCls?.grade || parseGradeFromClassName(student.class).grade,
+      enrolled: Boolean(student.class && student.class !== '-'),
+    };
+  };
+  const matchesAcademicYearRecord = (rec, yearId) => {
+    if (!yearId || yearId === 'all') return true;
+    if (rec.tahunAjarId) return rec.tahunAjarId === yearId;
+    const ta = tahunAjarList.find(t => t.id === yearId);
+    const range = getAcademicYearDateRange(ta);
+    if (!range || !rec.date) return false;
+    return rec.date >= range.startStr && rec.date <= range.endStr;
+  };
   let nilaiList = MOCK_GRADES.map(g => {
     const mapel = MOCK_SUBJECTS.find(m => m.nama === g.subject);
     return { ...g, mapelId: mapel?.id || 'mp001' };
@@ -219,6 +382,8 @@ export function createMockApiRouter() {
       name: user.name,
       role: normalizedRole,
       isPiket,
+      isActive: user.isActive !== false,
+      tokenVersion: Number(user.tokenVersion) || 1,
       teacherId: user.teacherId || null,
       studentId: user.studentId || null,
       homeroomClasses,
@@ -230,16 +395,19 @@ export function createMockApiRouter() {
   };
 
   // --- Auth & User Management ---
-  router.post('/auth/login', async (req, res) => {
+  router.post('/auth/login', validateBody(loginSchema), async (req, res) => {
     setAuthNoStoreHeaders(res);
-    const { username, password, rememberMe = true } = req.body || {};
-    if (!username || !password) {
-      return res.status(400).json({ success: false, error: 'Username dan password wajib diisi' });
-    }
+    const { username, password, rememberMe = true } = req.validatedBody;
     const cleanUsername = String(username).trim().toLowerCase();
     const user = users.find(u => u.username.toLowerCase() === cleanUsername);
     if (!user) {
       return res.status(401).json({ success: false, error: 'Username atau password salah' });
+    }
+    if (user.isActive === false) {
+      return res.status(403).json({
+        success: false,
+        error: 'Akun Anda sedang dinonaktifkan oleh administrator sekolah.',
+      });
     }
     const { valid } = await verifyPasswordAsync(password, user.password);
     if (!valid) {
@@ -264,7 +432,7 @@ export function createMockApiRouter() {
       return res.status(200).json({ success: false, authenticated: false, user: null });
     }
     const user = users.find(u => u.id === req.authUser.id);
-    if (!user) {
+    if (!user || user.isActive === false) {
       clearSessionCookie(req, res);
       return res.status(200).json({ success: false, authenticated: false, user: null });
     }
@@ -279,11 +447,8 @@ export function createMockApiRouter() {
     });
   });
 
-  router.post('/auth/change-password', requireAuth, async (req, res) => {
-    const { currentPassword, newPassword } = req.body || {};
-    if (!currentPassword || !newPassword) {
-      return res.status(400).json({ success: false, error: 'Password lama dan password baru wajib diisi.' });
-    }
+  router.post('/auth/change-password', requireAuth, validateBody(changePasswordSchema), async (req, res) => {
+    const { currentPassword, newPassword } = req.validatedBody;
     const idx = users.findIndex(u => u.id === req.authUser.id);
     if (idx === -1) {
       return res.status(404).json({ success: false, error: 'Akun tidak ditemukan.' });
@@ -296,14 +461,25 @@ export function createMockApiRouter() {
     if (!check.valid) {
       return res.status(400).json({ success: false, error: check.error });
     }
-    users[idx] = { ...users[idx], password: await hashPasswordAsync(check.value) };
+    const nextTv = (Number(users[idx].tokenVersion) || 1) + 1;
+    users[idx] = {
+      ...users[idx],
+      password: await hashPasswordAsync(check.value),
+      tokenVersion: nextTv,
+    };
+    tokenVersionGuard.invalidateUserSession(users[idx].id);
+    await logAudit(req, {
+      action: 'AUTH_CHANGE_PASSWORD',
+      target: `${users[idx].name} (@${users[idx].username})`,
+      detail: { newTokenVersion: nextTv, otherDevicesRevoked: true },
+    });
     const safeUser = buildSafeAuthUser(users[idx]);
     const token = signToken(safeUser, { rememberMe: true });
     setSessionCookie(req, res, token, { rememberMe: true });
     res.json({
       success: true,
       token,
-      message: 'Password berhasil diperbarui! Sesi login Anda tetap aktif.',
+      message: 'Password berhasil diperbarui! Sesi di perangkat lain otomatis terputus.',
     });
   });
 
@@ -321,16 +497,10 @@ export function createMockApiRouter() {
     }));
   });
 
-  router.post('/users', requireRole('admin'), async (req, res) => {
-    const { username, password, name, role, isPiket, teacherId, studentId } = req.body || {};
-    const cleanUsername = String(username || '').trim();
-    const cleanName = String(name || '').trim();
-    if (!cleanUsername || !cleanName || !password || String(password).length < 6) {
-      return res.status(400).json({ success: false, error: 'Username, nama, dan password (min. 6 karakter) wajib diisi.' });
-    }
-    if (!isValidRole(role)) {
-      return res.status(400).json({ success: false, error: 'Role tidak valid.' });
-    }
+  router.post('/users', requireRole('admin'), validateBody(userCreateSchema), async (req, res) => {
+    const { username, password, name, role, isPiket, isActive, teacherId, studentId } = req.validatedBody;
+    const cleanUsername = String(username).trim();
+    const cleanName = String(name).trim();
     if (users.some(u => u.username.toLowerCase() === cleanUsername.toLowerCase())) {
       return res.status(400).json({ success: false, error: `Username "${cleanUsername}" sudah digunakan.` });
     }
@@ -341,43 +511,82 @@ export function createMockApiRouter() {
       name: cleanName,
       role,
       isPiket: role === 'guru' ? Boolean(isPiket) : false,
+      isActive: isActive !== false,
+      tokenVersion: 1,
       teacherId: role === 'guru' && teacherId ? String(teacherId).trim() : null,
       studentId: role === 'wali_murid' && studentId ? String(studentId).trim() : null,
       createdAt: new Date().toISOString(),
     };
     users.push(created);
+    await logAudit(req, {
+      action: 'USER_CREATE',
+      target: `${created.name} (@${created.username})`,
+      detail: { role: created.role, isPiket: created.isPiket },
+    });
     res.json({ success: true, data: buildSafeAuthUser(created), message: 'Akun pengguna berhasil dibuat.' });
   });
 
-  router.put('/users/:id', requireRole('admin'), async (req, res) => {
+  router.put('/users/:id', requireRole('admin'), validateBody(userUpdateSchema), async (req, res) => {
     const idx = users.findIndex(u => u.id === req.params.id);
     if (idx === -1) return res.status(404).json({ success: false, error: 'Akun tidak ditemukan.' });
-    const { name, role, isPiket, password, teacherId, studentId } = req.body || {};
-    const nextRole = role !== undefined ? role : users[idx].role;
-    if (!isValidRole(nextRole)) {
-      return res.status(400).json({ success: false, error: 'Role tidak valid.' });
+    const prev = users[idx];
+    const { name, role, isPiket, isActive, password, teacherId, studentId } = req.validatedBody;
+    if (req.params.id === req.authUser.id && isActive === false) {
+      return res.status(400).json({ success: false, error: 'Anda tidak dapat menonaktifkan akun Anda sendiri.' });
     }
-    if (password && String(password).trim() && String(password).length < 6) {
-      return res.status(400).json({ success: false, error: 'Password minimal 6 karakter.' });
-    }
+    const nextRole = role !== undefined ? role : prev.role;
     const hashedPassword = password && String(password).trim() ? await hashPasswordAsync(password) : null;
+    const nextActive = isActive !== undefined ? Boolean(isActive) : prev.isActive !== false;
+    const shouldRevoke = Boolean(hashedPassword) || nextRole !== prev.role || nextActive === false;
+    const nextTokenVersion = shouldRevoke ? (Number(prev.tokenVersion) || 1) + 1 : (Number(prev.tokenVersion) || 1);
+
     users[idx] = {
-      ...users[idx],
+      ...prev,
       ...(name && String(name).trim() ? { name: String(name).trim() } : {}),
       role: nextRole,
-      isPiket: nextRole === 'guru' ? Boolean(isPiket !== undefined ? isPiket : users[idx].isPiket) : false,
+      isPiket: nextRole === 'guru' ? Boolean(isPiket !== undefined ? isPiket : prev.isPiket) : false,
+      isActive: nextActive,
+      tokenVersion: nextTokenVersion,
       ...(hashedPassword ? { password: hashedPassword } : {}),
       ...(teacherId !== undefined ? { teacherId: nextRole === 'guru' && teacherId ? String(teacherId).trim() : null } : {}),
       ...(studentId !== undefined ? { studentId: nextRole === 'wali_murid' && studentId ? String(studentId).trim() : null } : {}),
     };
-    res.json({ success: true, data: buildSafeAuthUser(users[idx]), message: 'Akun pengguna berhasil diperbarui.' });
+    if (shouldRevoke) {
+      tokenVersionGuard.invalidateUserSession(prev.id);
+    }
+    await logAudit(req, {
+      action: hashedPassword ? 'USER_PASSWORD_RESET' : nextActive === false ? 'USER_DEACTIVATE' : 'USER_UPDATE',
+      target: `${users[idx].name} (@${users[idx].username})`,
+      detail: {
+        roleChanged: nextRole !== prev.role ? `${prev.role} -> ${nextRole}` : undefined,
+        passwordReset: Boolean(hashedPassword),
+        isActive: nextActive,
+        sessionsRevoked: shouldRevoke,
+      },
+    });
+    res.json({
+      success: true,
+      data: buildSafeAuthUser(users[idx]),
+      message: shouldRevoke
+        ? 'Akun diperbarui & sesi perangkat lama otomatis diputus.'
+        : 'Akun pengguna berhasil diperbarui.',
+    });
   });
 
-  router.delete('/users/:id', requireRole('admin'), (req, res) => {
+  router.delete('/users/:id', requireRole('admin'), async (req, res) => {
     if (req.params.id === req.authUser.id) {
       return res.status(400).json({ success: false, error: 'Anda tidak dapat menghapus akun yang sedang aktif digunakan.' });
     }
+    const target = users.find(u => u.id === req.params.id);
     users = users.filter(u => u.id !== req.params.id);
+    tokenVersionGuard.invalidateUserSession(req.params.id);
+    if (target) {
+      await logAudit(req, {
+        action: 'USER_DELETE',
+        target: `${target.name} (@${target.username})`,
+        detail: { role: target.role },
+      });
+    }
     res.json({ success: true, message: 'Akun pengguna berhasil dihapus.' });
   });
 
@@ -615,17 +824,82 @@ export function createMockApiRouter() {
 
   // --- Absensi Piket Siswa (Concurrency-safe + Piket/Staff/Admin RBAC) ---
   router.get('/absensi', requireAuth, (req, res) => {
-    const { kelas, date, month, studentId } = req.query;
+    const { kelas, date, month, studentId, tahunAjarId } = req.query;
+    const { isPaginated, page, limit, skip } = parsePaginationParams(req.query, { defaultLimit: 50, maxLimit: 200 });
     let list = [...absensiPiketList];
     if (req.authUser.role === 'wali_murid') {
       list = list.filter(a => a.studentId === (req.authUser.studentId || '__no_linked_student__'));
     } else {
       if (studentId) list = list.filter(a => a.studentId === studentId);
-      if (kelas) list = list.filter(a => a.class === kelas);
+      if (kelas && kelas !== 'Semua') list = list.filter(a => a.class === kelas);
+    }
+    if (tahunAjarId && tahunAjarId !== 'all') {
+      list = list.filter(a => matchesAcademicYearRecord(a, String(tahunAjarId)));
     }
     if (date) list = list.filter(a => a.date === date);
-    if (month) list = list.filter(a => (a.date || '').startsWith(month));
+    if (month && month !== 'all') list = list.filter(a => (a.date || '').startsWith(month));
+    list.sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+
+    if (isPaginated) {
+      return res.json({
+        success: true,
+        items: list.slice(skip, skip + limit),
+        pagination: buildPaginationMeta(list.length, page, limit),
+      });
+    }
     res.json(list);
+  });
+
+  // --- Aggregated Annual / Semester / Monthly Piket Attendance Summary ---
+  router.get('/absensi/summary', requireRole('admin', 'guru', 'staff', 'kepsek'), (req, res) => {
+    const { tahunAjarId, kelas, month, sesi = 'pagi', search = '' } = req.query;
+    const { page, limit } = parsePaginationParams(
+      { ...req.query, paginated: 'true' },
+      { defaultLimit: 25, maxLimit: 200 }
+    );
+    const targetYear = tahunAjarId && tahunAjarId !== 'all'
+      ? tahunAjarList.find(t => t.id === String(tahunAjarId))
+      : (tahunAjarId === 'all' ? null : getActiveYear());
+
+    let records = [...absensiPiketList];
+    if (targetYear) {
+      records = records.filter(a => matchesAcademicYearRecord(a, targetYear.id));
+    }
+    if (kelas && kelas !== 'Semua') {
+      records = records.filter(a => a.class === kelas);
+    }
+    if (month && month !== 'all') {
+      records = records.filter(a => (a.date || '').startsWith(month));
+    }
+
+    const studentsForScope = siswaList
+      .map(s => {
+        const resolved = resolveStudentClassForYear(s, targetYear ? targetYear.id : null);
+        return { ...s, class: resolved.className, _enrolled: resolved.enrolled };
+      })
+      .filter(s => {
+        if (targetYear && !s._enrolled) return false;
+        if (kelas && kelas !== 'Semua' && s.class !== kelas) return false;
+        return true;
+      });
+
+    const aggregated = aggregatePiketSummary({
+      records,
+      students: studentsForScope,
+      sesi: sesi === 'sore' ? 'sore' : 'pagi',
+      search,
+      page,
+      limit,
+    });
+
+    res.json({
+      success: true,
+      tahunAjar: targetYear ? { id: targetYear.id, nama: targetYear.nama, semester: targetYear.semester } : null,
+      kelas: kelas || 'Semua',
+      month: month || 'all',
+      sesi: sesi === 'sore' ? 'sore' : 'pagi',
+      ...aggregated,
+    });
   });
 
   router.post('/absensi', requirePiketAccess, (req, res) => {
@@ -748,7 +1022,79 @@ export function createMockApiRouter() {
       return res.status(400).json({ success: false, error: 'Tidak ada data siswa atau status absensi yang valid.' });
     }
 
-    res.json({ success: true, savedCount: saved.length, records: saved, message: 'Absensi piket berhasil disimpan.' });
+    // Audit backdated attendance edits (tanggal lampau)
+    const todayDateStr = getJakartaNow().dateStr;
+    const backdatedDates = [...new Set(saved.map(s => s.date).filter(d => d && d < todayDateStr))];
+    if (backdatedDates.length > 0) {
+      logAudit(req, {
+        action: 'ATTENDANCE_BACKDATED_EDIT',
+        target: `Tanggal ${backdatedDates.join(', ')}`,
+        detail: { session: cleanSession || 'both', savedCount: saved.length },
+      });
+    }
+
+    // Automatic Alpha & Bolos notifications to homeroom teacher & parent
+    const alerts = detectAttendanceAlerts({
+      savedRecords: saved,
+      studentsById: new Map(siswaList.map(s => [s.id, s])),
+      classesById: new Map(kelasList.map(k => [k.id, k])),
+      teachersById: new Map(guruList.map(g => [g.id, g])),
+      users,
+      config: schoolConfig,
+    });
+    if (alerts.length > 0) {
+      for (const alert of alerts) {
+        const channel = schoolConfig.whatsappEnabled && schoolConfig.whatsappWebhookUrl ? 'whatsapp_webhook' : 'in_app';
+        const notifEntry = {
+          id: newId(),
+          ...alert,
+          channel,
+          deliveryStatus: channel === 'whatsapp_webhook' ? 'sent' : 'sent',
+          readAt: null,
+          createdAt: new Date().toISOString(),
+        };
+        notificationLogs.unshift(notifEntry);
+        if (channel === 'whatsapp_webhook') {
+          dispatchWebhookPayload(schoolConfig.whatsappWebhookUrl, {
+            event: alert.eventType,
+            schoolName: schoolConfig.schoolName,
+            ...alert,
+          }).then((r) => {
+            notifEntry.deliveryStatus = r.status;
+          }).catch(() => {});
+        }
+      }
+      if (notificationLogs.length > 1000) notificationLogs.length = 1000;
+    }
+
+    const affectedClassNames = [...new Set(saved.map(s => s.class).filter(Boolean))];
+    const affectedStudentIds = [...new Set(saved.map(s => s.studentId).filter(Boolean))];
+    realtimeHub.publish({
+      type: 'attendance:updated',
+      classNames: affectedClassNames,
+      studentIds: affectedStudentIds,
+      date: saved[0]?.date || null,
+      session: cleanSession || 'both',
+      updatedBy: req.authUser?.name || null,
+    });
+    if (alerts.length > 0) {
+      realtimeHub.publish({
+        type: 'notification:created',
+        classNames: [...new Set(alerts.map(a => a.className).filter(Boolean))],
+        studentIds: [...new Set(alerts.map(a => a.studentId).filter(Boolean))],
+        recipientUserIds: [...new Set(alerts.map(a => a.recipientUserId).filter(Boolean))],
+        date: saved[0]?.date || null,
+        updatedBy: req.authUser?.name || null,
+      });
+    }
+
+    res.json({
+      success: true,
+      savedCount: saved.length,
+      notificationsTriggered: alerts.length,
+      records: saved,
+      message: 'Absensi piket berhasil disimpan.',
+    });
   });
 
   // Helper internal: profil kehadiran & risk tier per siswa
@@ -1030,11 +1376,24 @@ export function createMockApiRouter() {
       ...(maxScore ? { maxScore: Number(maxScore) } : {}),
       ...(semester ? { semester: Number(semester) } : {}),
     };
+    logAudit(req, {
+      action: 'GRADE_UPDATE',
+      target: `${nilaiList[idx].studentName} (${nilaiList[idx].subject} - ${nilaiList[idx].type})`,
+      detail: { score: nilaiList[idx].score },
+    });
     res.json({ success: true, data: nilaiList[idx], message: 'Nilai siswa berhasil diperbarui.' });
   });
 
   router.delete('/nilai/:id', requireRole('admin', 'guru'), (req, res) => {
+    const target = nilaiList.find(n => n.id === req.params.id);
     nilaiList = nilaiList.filter(n => n.id !== req.params.id);
+    if (target) {
+      logAudit(req, {
+        action: 'GRADE_DELETE',
+        target: `${target.studentName} (${target.subject} - ${target.type})`,
+        detail: { previousScore: target.score },
+      });
+    }
     res.json({ success: true, message: 'Data nilai berhasil dihapus.' });
   });
 
@@ -1106,7 +1465,7 @@ export function createMockApiRouter() {
     res.json({ success: true, message: 'Catatan poin berhasil dihapus.' });
   });
 
-  // --- School Geofence Settings (Authoritative for all devices) ---
+  // --- School Geofence Settings (Authoritative for all devices, synced with SchoolConfig) ---
   let schoolGeofenceConfig = { ...DEFAULT_SCHOOL_GEOFENCE };
 
   router.get('/settings/geofence', requireAuth, (req, res) => {
@@ -1122,6 +1481,17 @@ export function createMockApiRouter() {
       });
     }
     schoolGeofenceConfig = valid;
+    schoolConfig = {
+      ...schoolConfig,
+      geofenceLat: valid.latitude,
+      geofenceLng: valid.longitude,
+      geofenceRadius: valid.radiusMeters,
+    };
+    logAudit(req, {
+      action: 'SCHOOL_GEOFENCE_CONFIG',
+      target: `Radius ${valid.radiusMeters}m`,
+      detail: valid,
+    });
     res.json({
       success: true,
       data: schoolGeofenceConfig,
@@ -1376,7 +1746,15 @@ export function createMockApiRouter() {
   });
 
   router.delete('/guru/:id', requireRole('admin'), (req, res) => {
+    const target = guruList.find(g => g.id === req.params.id);
     guruList = guruList.filter(g => g.id !== req.params.id);
+    if (target) {
+      logAudit(req, {
+        action: 'TEACHER_DELETE',
+        target: target.name,
+        detail: { nip: target.nip || null },
+      });
+    }
     res.json({ success: true, message: 'Guru berhasil dihapus' });
   });
 
@@ -1384,33 +1762,79 @@ export function createMockApiRouter() {
   const VALID_STUDENT_STATUSES = new Set(['aktif', 'lulus', 'pindah', 'nonaktif']);
 
   router.get('/siswa', requireAuth, (req, res) => {
-    const { kelas, status, includeInactive } = req.query;
-    let list = [...siswaList];
+    const { kelas, status, includeInactive, tahunAjarId, grade, search } = req.query;
+    const { isPaginated, page, limit, skip } = parsePaginationParams(req.query, { defaultLimit: 25, maxLimit: 200 });
+    const useExplicitYear = Boolean(tahunAjarId && tahunAjarId !== 'all');
+    const resolvedYearId = useExplicitYear ? String(tahunAjarId) : (tahunAjarId === 'all' ? 'all' : (getActiveYear()?.id || null));
+
+    const allWithYearClass = siswaList.map(s => {
+      const resolved = resolveStudentClassForYear(s, resolvedYearId === 'all' ? null : resolvedYearId);
+      return {
+        id: s.id,
+        nomor: s.nomor || s.nis || '-',
+        nis: s.nis || s.nomor || '-',
+        name: s.name,
+        class: resolved.className,
+        kelasId: resolved.kelasId,
+        grade: resolved.grade || parseGradeFromClassName(resolved.className).grade,
+        gender: s.gender || 'L',
+        status: s.status || 'aktif',
+        phone: s.phone || '-',
+        phone_parent: s.phone_parent || '-',
+        pekerjaan_ortu: s.pekerjaan_ortu || '-',
+        alamat: s.alamat || '-',
+        sekolah_asal: s.sekolah_asal || '-',
+        _enrolled: resolved.enrolled,
+      };
+    });
+
+    let list = [...allWithYearClass];
     if (req.authUser.role === 'wali_murid') {
       list = list.filter(s => s.id === (req.authUser.studentId || '__no_linked_student__'));
     } else {
       if (status && status !== 'all' && VALID_STUDENT_STATUSES.has(status)) {
-        list = list.filter(s => (s.status || 'aktif') === status);
+        list = list.filter(s => s.status === status);
       } else if (includeInactive !== 'true' && status !== 'all') {
-        list = list.filter(s => (s.status || 'aktif') === 'aktif');
+        list = list.filter(s => s.status === 'aktif');
       }
-      if (kelas) list = list.filter(s => s.class === kelas);
+      if (useExplicitYear && status !== 'lulus' && status !== 'all') {
+        list = list.filter(s => s._enrolled);
+      }
+      if (kelas && kelas !== 'Semua') list = list.filter(s => s.class === kelas);
+      if (grade && grade !== 'Semua' && ['X', 'XI', 'XII'].includes(String(grade).toUpperCase())) {
+        const gUpper = String(grade).toUpperCase();
+        list = list.filter(s => (s.grade || '').toUpperCase() === gUpper);
+      }
+      const cleanSearch = String(search || '').trim().toLowerCase();
+      if (cleanSearch) {
+        list = list.filter(
+          s =>
+            s.name.toLowerCase().includes(cleanSearch) ||
+            String(s.nomor || '').toLowerCase().includes(cleanSearch) ||
+            String(s.class || '').toLowerCase().includes(cleanSearch)
+        );
+      }
     }
+
     list.sort((a, b) => a.name.localeCompare(b.name));
-    res.json(list.map(s => ({
-      id: s.id,
-      nomor: s.nomor || s.nis || '-',
-      nis: s.nis || s.nomor || '-',
-      name: s.name,
-      class: s.class || '-',
-      gender: s.gender || 'L',
-      status: s.status || 'aktif',
-      phone: s.phone || '-',
-      phone_parent: s.phone_parent || '-',
-      pekerjaan_ortu: s.pekerjaan_ortu || '-',
-      alamat: s.alamat || '-',
-      sekolah_asal: s.sekolah_asal || '-',
-    })));
+    const stripInternal = ({ _enrolled, ...rest }) => rest;
+
+    if (isPaginated) {
+      const counts = { aktif: 0, lulus: 0, pindah: 0, nonaktif: 0, total: siswaList.length };
+      for (const s of siswaList) {
+        const st = s.status || 'aktif';
+        if (counts[st] !== undefined) counts[st]++;
+      }
+      return res.json({
+        success: true,
+        items: list.slice(skip, skip + limit).map(stripInternal),
+        pagination: buildPaginationMeta(list.length, page, limit),
+        counts,
+        tahunAjarId: useExplicitYear ? String(tahunAjarId) : null,
+      });
+    }
+
+    res.json(list.map(stripInternal));
   });
 
   router.post('/siswa', requireRole('admin', 'staff'), (req, res) => {
@@ -1434,6 +1858,11 @@ export function createMockApiRouter() {
       sekolah_asal: sekolah_asal ? String(sekolah_asal).trim() : '-',
     };
     siswaList.push(siswa);
+    const activeYr = getActiveYear();
+    const clsObj = kelasList.find(k => k.name === siswa.class);
+    if (activeYr && clsObj) {
+      riwayatKelasList.push({ id: newId(), siswaId: siswa.id, kelasId: clsObj.id, tahunAjarId: activeYr.id });
+    }
     res.json({ success: true, student: siswa, message: 'Siswa berhasil ditambahkan' });
   });
 
@@ -1501,6 +1930,11 @@ export function createMockApiRouter() {
 
     if (!force && hasHistory) {
       siswaList[idx] = { ...siswaList[idx], status: 'nonaktif' };
+      logAudit(req, {
+        action: 'STUDENT_ARCHIVE',
+        target: siswaList[idx].name,
+        detail: { reason: 'has_attendance_history' },
+      });
       return res.json({
         success: true,
         archived: true,
@@ -1645,6 +2079,192 @@ export function createMockApiRouter() {
     res.json(sorted);
   });
 
+  // --- Tutup Semester & Kenaikan Kelas Massal (Preview & Execute) ---
+  router.get('/tahun-ajar/rollover-preview', requireRole('admin'), (req, res) => {
+    const { sourceYearId, targetYearId, mode = 'promote' } = req.query;
+    const cleanMode = mode === 'semester' ? 'semester' : 'promote';
+
+    const sourceYear = sourceYearId
+      ? tahunAjarList.find(y => y.id === String(sourceYearId))
+      : getActiveYear();
+    if (!sourceYear) {
+      return res.status(404).json({ success: false, error: 'Tahun ajar sumber tidak ditemukan.' });
+    }
+    const targetYear = targetYearId ? tahunAjarList.find(y => y.id === String(targetYearId)) : null;
+
+    const sourceEnrollments = riwayatKelasList.filter(r => {
+      if (r.tahunAjarId !== sourceYear.id) return false;
+      const st = siswaList.find(s => s.id === r.siswaId);
+      return st && (st.status || 'aktif') === 'aktif';
+    });
+    const alreadyEnrolledSet = new Set(
+      targetYear ? riwayatKelasList.filter(r => r.tahunAjarId === targetYear.id).map(r => r.siswaId) : []
+    );
+
+    const groupsMap = new Map();
+    const flatEnrollments = [];
+
+    for (const enr of sourceEnrollments) {
+      const st = siswaList.find(s => s.id === enr.siswaId);
+      const cls = kelasList.find(k => k.id === enr.kelasId);
+      if (!st || !cls) continue;
+      if (!groupsMap.has(cls.id)) {
+        groupsMap.set(cls.id, {
+          id: cls.id,
+          name: cls.name,
+          grade: cls.grade,
+          major: cls.major,
+          studentCount: 0,
+          students: [],
+        });
+      }
+      const grp = groupsMap.get(cls.id);
+      grp.studentCount++;
+      grp.students.push({
+        studentId: st.id,
+        studentName: st.name,
+        nis: st.nomor || st.nis || '-',
+        gender: st.gender || 'L',
+        alreadyEnrolledInTarget: alreadyEnrolledSet.has(st.id),
+      });
+      flatEnrollments.push({
+        studentId: st.id,
+        studentName: st.name,
+        classId: cls.id,
+        className: cls.name,
+      });
+    }
+
+    const groups = Array.from(groupsMap.values())
+      .map(g => ({ ...g, students: g.students.sort((a, b) => a.studentName.localeCompare(b.studentName)) }))
+      .sort((a, b) => String(a.grade || '').localeCompare(String(b.grade || '')) || a.name.localeCompare(b.name));
+
+    const mappings = suggestClassMapping(groups, kelasList, cleanMode);
+    const previewPlan = buildRolloverPlan({
+      enrollments: flatEnrollments,
+      mappings,
+      alreadyEnrolledStudentIds: Array.from(alreadyEnrolledSet),
+      validClassIds: kelasList.map(c => c.id),
+    });
+
+    res.json({
+      success: true,
+      mode: cleanMode,
+      sourceYear: { id: sourceYear.id, nama: sourceYear.nama, semester: sourceYear.semester, isActive: sourceYear.isActive },
+      targetYear: targetYear
+        ? { id: targetYear.id, nama: targetYear.nama, semester: targetYear.semester, isActive: targetYear.isActive }
+        : null,
+      classes: kelasList.map(c => ({ id: c.id, name: c.name, grade: c.grade, major: c.major })),
+      mappings,
+      groups,
+      summary: previewPlan.summary,
+      missingMappings: mappings.filter(m => m.action === 'promote' && !m.targetClassId).map(m => m.sourceClassName),
+    });
+  });
+
+  router.post('/tahun-ajar/rollover', requireRole('admin'), (req, res) => {
+    const {
+      sourceYearId,
+      targetYearId,
+      mode = 'promote',
+      mappings = [],
+      retainStudentIds = [],
+      excludedStudentIds = [],
+      activateTargetYear = true,
+    } = req.body || {};
+
+    if (!sourceYearId || !targetYearId) {
+      return res.status(400).json({ success: false, error: 'Tahun ajar sumber dan tujuan wajib dipilih.' });
+    }
+    if (sourceYearId === targetYearId) {
+      return res.status(400).json({ success: false, error: 'Tahun ajar tujuan harus berbeda dari tahun ajar sumber.' });
+    }
+
+    const sourceYear = tahunAjarList.find(y => y.id === String(sourceYearId));
+    const targetYear = tahunAjarList.find(y => y.id === String(targetYearId));
+    if (!sourceYear || !targetYear) {
+      return res.status(404).json({ success: false, error: 'Tahun ajar sumber atau tujuan tidak ditemukan.' });
+    }
+
+    const flatEnrollments = riwayatKelasList
+      .filter(r => {
+        if (r.tahunAjarId !== sourceYear.id) return false;
+        const st = siswaList.find(s => s.id === r.siswaId);
+        return st && (st.status || 'aktif') === 'aktif';
+      })
+      .map(r => {
+        const st = siswaList.find(s => s.id === r.siswaId);
+        const cls = kelasList.find(k => k.id === r.kelasId);
+        return { studentId: r.siswaId, studentName: st?.name || '-', classId: r.kelasId, className: cls?.name || '-' };
+      });
+
+    const plan = buildRolloverPlan({
+      enrollments: flatEnrollments,
+      mappings: Array.isArray(mappings) ? mappings : [],
+      retainStudentIds: Array.isArray(retainStudentIds) ? retainStudentIds : [],
+      excludedStudentIds: Array.isArray(excludedStudentIds) ? excludedStudentIds : [],
+      validClassIds: kelasList.map(c => c.id),
+    });
+
+    if (!plan.valid) {
+      return res.status(400).json({
+        success: false,
+        error: plan.errors[0] || 'Pemetaan kelas tujuan belum lengkap.',
+        errors: plan.errors,
+      });
+    }
+
+    for (const act of plan.actions) {
+      if (['promote', 'keep', 'retain'].includes(act.action) && act.targetClassId) {
+        const existingIdx = riwayatKelasList.findIndex(
+          r => r.siswaId === act.studentId && r.tahunAjarId === targetYear.id
+        );
+        if (existingIdx !== -1) {
+          riwayatKelasList[existingIdx].kelasId = act.targetClassId;
+        } else {
+          riwayatKelasList.push({ id: newId(), siswaId: act.studentId, kelasId: act.targetClassId, tahunAjarId: targetYear.id });
+        }
+        if (activateTargetYear) {
+          const st = siswaList.find(s => s.id === act.studentId);
+          const targetCls = kelasList.find(k => k.id === act.targetClassId);
+          if (st && targetCls) st.class = targetCls.name;
+        }
+      } else if (act.action === 'graduate') {
+        const st = siswaList.find(s => s.id === act.studentId);
+        if (st) st.status = 'lulus';
+      }
+    }
+
+    if (activateTargetYear) {
+      tahunAjarList = tahunAjarList.map(t => ({ ...t, isActive: t.id === targetYear.id }));
+      for (const cls of kelasList) {
+        const activeCount = riwayatKelasList.filter(r => {
+          if (r.tahunAjarId !== targetYear.id || r.kelasId !== cls.id) return false;
+          const st = siswaList.find(s => s.id === r.siswaId);
+          return st && (st.status || 'aktif') === 'aktif';
+        }).length;
+        cls.totalStudents = activeCount;
+      }
+    }
+
+    logAktivitasList.unshift({
+      id: newId(),
+      userId: req.authUser?.id || null,
+      userName: req.authUser?.name || req.authUser?.username || 'Admin',
+      action: 'BULK_ACADEMIC_ROLLOVER',
+      target: `${sourceYear.nama} Smt ${sourceYear.semester} -> ${targetYear.nama} Smt ${targetYear.semester}`,
+      details: JSON.stringify({ mode, activateTargetYear: Boolean(activateTargetYear), summary: plan.summary }),
+      createdAt: new Date().toISOString(),
+    });
+
+    res.json({
+      success: true,
+      summary: plan.summary,
+      activatedTargetYear: Boolean(activateTargetYear),
+      message: `Proses ${mode === 'semester' ? 'Tutup Semester' : 'Kenaikan Kelas & Kelulusan'} berhasil: ${plan.summary.toPromote + plan.summary.toKeep} siswa dipindahkan, ${plan.summary.toGraduate} siswa diluluskan, ${plan.summary.toRetain} tinggal kelas.`,
+    });
+  });
+
   router.post('/tahun-ajar', requireRole('admin'), (req, res) => {
     const { nama, semester, startDate, endDate, isActive } = req.body || {};
     const shouldBeActive = Boolean(isActive);
@@ -1746,42 +2366,77 @@ export function createMockApiRouter() {
     if (savedCount === 0) {
       return res.status(400).json({ success: false, error: 'Tidak ada data absensi mapel yang valid.' });
     }
+    const mapelClasses = [...new Set(records.map(r => r.class || r.kelasName || siswaList.find(s => s.id === r.studentId)?.class).filter(Boolean))];
+    const mapelStudentIds = [...new Set(records.map(r => r.studentId).filter(Boolean))];
+    realtimeHub.publish({
+      type: 'subject-attendance:updated',
+      classNames: mapelClasses,
+      studentIds: mapelStudentIds,
+      date: records[0]?.date || null,
+      updatedBy: req.authUser?.name || null,
+    });
     res.json({ success: true, savedCount, message: 'Absensi mapel berhasil disimpan.' });
   });
 
   router.get('/absensi-mapel', requireAuth, (req, res) => {
-    const { kelas, mapel, date, month, studentId } = req.query;
+    const { kelas, mapel, date, month, studentId, tahunAjarId } = req.query;
+    const { isPaginated, page, limit, skip } = parsePaginationParams(req.query, { defaultLimit: 50, maxLimit: 200 });
     let list = [...absensiMapelList];
     if (req.authUser.role === 'wali_murid') {
       list = list.filter(a => a.studentId === (req.authUser.studentId || '__no_linked_student__'));
     } else {
       if (studentId) list = list.filter(a => a.studentId === studentId);
-      if (kelas) list = list.filter(a => a.class === kelas);
+      if (kelas && kelas !== 'Semua') list = list.filter(a => a.class === kelas);
     }
-    if (mapel) list = list.filter(a => a.mapelId === mapel || a.subject === mapel);
+    if (tahunAjarId && tahunAjarId !== 'all') {
+      list = list.filter(a => matchesAcademicYearRecord(a, String(tahunAjarId)));
+    }
+    if (mapel && mapel !== 'Semua') list = list.filter(a => a.mapelId === mapel || a.subject === mapel);
     if (date) list = list.filter(a => a.date === date);
-    if (month) list = list.filter(a => (a.date || '').startsWith(month));
+    if (month && month !== 'all') list = list.filter(a => (a.date || '').startsWith(month));
     list.sort((a, b) => (b.date || '').localeCompare(a.date || '') || (a.jamKe || 0) - (b.jamKe || 0));
+
+    if (isPaginated) {
+      return res.json({
+        success: true,
+        items: list.slice(skip, skip + limit),
+        pagination: buildPaginationMeta(list.length, page, limit),
+      });
+    }
     res.json(list);
   });
 
   router.get('/absensi-mapel/rekap', requireRole('admin', 'guru', 'staff', 'kepsek'), (req, res) => {
-    const { kelas, mapel, month } = req.query;
-    if (!kelas || !month) {
-      return res.json({ success: false, error: 'Parameter kelas dan month wajib' });
+    const { kelas, mapel, month, tahunAjarId, search } = req.query;
+    const { isPaginated, page, limit } = parsePaginationParams(req.query, { defaultLimit: 25, maxLimit: 200 });
+    const targetYear = tahunAjarId && tahunAjarId !== 'all'
+      ? tahunAjarList.find(t => t.id === String(tahunAjarId))
+      : (tahunAjarId === 'all' ? null : getActiveYear());
+
+    let list = [...absensiMapelList];
+    if (targetYear) list = list.filter(a => matchesAcademicYearRecord(a, targetYear.id));
+    if (kelas && kelas !== 'Semua') list = list.filter(a => a.class === kelas);
+    if (month && month !== 'all') list = list.filter(a => (a.date || '').startsWith(month));
+    if (mapel && mapel !== 'Semua' && mapel !== 'semua') {
+      list = list.filter(a => a.mapelId === mapel || a.subject === mapel);
     }
-    let list = absensiMapelList.filter(a => a.class === kelas && (a.date || '').startsWith(month));
-    if (mapel) list = list.filter(a => a.mapelId === mapel || a.subject === mapel);
 
     const sesiSet = new Set();
-    list.forEach(a => sesiSet.add(`${a.date}_${a.jamKe}_${a.mapelId}`));
-
+    const totals = { hadir: 0, izin: 0, sakit: 0, alpha: 0, totalRecords: 0, attendanceRate: 0 };
     const studentMap = {};
+
     list.forEach(a => {
+      sesiSet.add(`${a.date}_${a.jamKe}_${a.mapelId}`);
+      if (totals[a.status] !== undefined) {
+        totals[a.status]++;
+        totals.totalRecords++;
+      }
       if (!studentMap[a.studentId]) {
+        const st = siswaList.find(item => item.id === a.studentId);
         studentMap[a.studentId] = {
           studentId: a.studentId,
           studentName: a.studentName,
+          nis: st?.nomor || st?.nis || '-',
           class: a.class,
           hadir: 0,
           izin: 0,
@@ -1796,20 +2451,42 @@ export function createMockApiRouter() {
       else if (a.status === 'alpha') s.alpha++;
     });
 
-    const rekap = Object.values(studentMap)
+    totals.attendanceRate = totals.totalRecords > 0
+      ? Math.round((totals.hadir / totals.totalRecords) * 100)
+      : 0;
+
+    const cleanSearch = String(search || '').trim().toLowerCase();
+    let rekapAll = Object.values(studentMap)
       .map(s => {
         const totalSesi = s.hadir + s.izin + s.sakit + s.alpha;
         return { ...s, totalSesi, persentase: totalSesi > 0 ? Math.round((s.hadir / totalSesi) * 100) : 0 };
       })
       .sort((a, b) => a.studentName.localeCompare(b.studentName));
 
+    if (cleanSearch) {
+      rekapAll = rekapAll.filter(
+        r =>
+          r.studentName.toLowerCase().includes(cleanSearch) ||
+          String(r.nis || '').toLowerCase().includes(cleanSearch) ||
+          String(r.class || '').toLowerCase().includes(cleanSearch)
+      );
+    }
+
+    const pagination = buildPaginationMeta(rekapAll.length, page, limit);
+    const rekap = isPaginated
+      ? rekapAll.slice((pagination.page - 1) * pagination.limit, pagination.page * pagination.limit)
+      : rekapAll;
+
     res.json({
       success: true,
       totalSesiGuru: sesiSet.size,
-      kelas,
-      bulan: month,
+      kelas: kelas || 'Semua',
+      bulan: month || 'all',
+      tahunAjarId: targetYear?.id || null,
       mapelId: mapel || 'semua',
+      totals,
       rekap,
+      pagination,
     });
   });
 
@@ -1846,6 +2523,298 @@ export function createMockApiRouter() {
       totalUsers: users.length,
     });
   });
+
+  // --- Mount Real-Time SSE Hub & Modular Routers (Audit/Backup, School Config/Notifications, Operations) ---
+  router.use(realtimeHub.createRouter());
+  router.use(
+    createAuditRouter({
+      listAuditLogs: async ({ action, search, page, limit }) => {
+        let filtered = [...logAktivitasList];
+        if (action) filtered = filtered.filter(l => l.action === action);
+        if (search) {
+          const q = search.toLowerCase();
+          filtered = filtered.filter(
+            l =>
+              String(l.userName || '').toLowerCase().includes(q) ||
+              String(l.action || '').toLowerCase().includes(q) ||
+              String(l.target || '').toLowerCase().includes(q) ||
+              String(l.detail || '').toLowerCase().includes(q)
+          );
+        }
+        const actions = [...new Set(logAktivitasList.map(l => l.action))].sort();
+        const start = (page - 1) * limit;
+        return {
+          total: filtered.length,
+          items: filtered.slice(start, start + limit),
+          actions,
+        };
+      },
+      revokeUserSessions: async (userId) => {
+        const idx = users.findIndex(u => u.id === userId);
+        if (idx === -1) return null;
+        const nextTv = (Number(users[idx].tokenVersion) || 1) + 1;
+        users[idx] = { ...users[idx], tokenVersion: nextTv };
+        tokenVersionGuard.invalidateUserSession(userId);
+        return {
+          id: users[idx].id,
+          username: users[idx].username,
+          name: users[idx].name,
+          tokenVersion: nextTv,
+        };
+      },
+      buildBackupSnapshot: async () => ({
+        counts: {
+          tahunAjar: tahunAjarList.length,
+          kelas: kelasList.length,
+          guru: guruList.length,
+          siswa: siswaList.length,
+          riwayatKelas: riwayatKelasList.length,
+          mapel: mapelList.length,
+          absensi: absensiPiketList.length,
+          nilai: nilaiList.length,
+          pembayaran: pembayaranList.length,
+          absensiSholat: absenSholatList.length,
+          users: users.length,
+        },
+        data: {
+          schoolConfig,
+          tahunAjar: tahunAjarList,
+          kelas: kelasList,
+          guru: guruList,
+          siswa: siswaList,
+          riwayatKelas: riwayatKelasList,
+          mapel: mapelList,
+          absensi: absensiPiketList,
+          nilai: nilaiList,
+          pembayaran: pembayaranList,
+          absensiSholat: absenSholatList,
+          users: users.map(({ password: _omit, ...safe }) => safe),
+        },
+      }),
+      recordBackupRun: async ({ exportedAt }) => {
+        schoolConfig = { ...schoolConfig, lastBackupAt: exportedAt };
+      },
+      logAudit,
+    })
+  );
+
+  router.use(
+    createSchoolConfigRouter({
+      getSchoolConfig: async () => ({
+        ...schoolConfig,
+        geofenceLat: schoolGeofenceConfig.latitude,
+        geofenceLng: schoolGeofenceConfig.longitude,
+        geofenceRadius: schoolGeofenceConfig.radiusMeters,
+      }),
+      saveSchoolConfig: async (patch) => {
+        schoolConfig = { ...schoolConfig, ...patch, updatedAt: new Date().toISOString() };
+        if (patch.geofenceLat !== undefined || patch.geofenceLng !== undefined || patch.geofenceRadius !== undefined) {
+          schoolGeofenceConfig = {
+            latitude: Number(schoolConfig.geofenceLat),
+            longitude: Number(schoolConfig.geofenceLng),
+            radiusMeters: Number(schoolConfig.geofenceRadius),
+          };
+        }
+        return { ...schoolConfig };
+      },
+      listNotifications: async ({ user, unreadOnly, eventType, page, limit }) => {
+        let list = [...notificationLogs];
+        if (user.role === 'wali_murid') {
+          list = list.filter(
+            n => n.recipientUserId === user.id || (user.studentId && n.studentId === user.studentId && n.recipientRole === 'wali_murid')
+          );
+        } else if (user.role === 'guru') {
+          const homeroomNames = new Set((user.homeroomClasses || []).map(c => c.name));
+          list = list.filter(
+            n => n.recipientUserId === user.id || (n.recipientRole === 'guru' && homeroomNames.has(n.className))
+          );
+        }
+        if (eventType) list = list.filter(n => n.eventType === eventType);
+        const unreadCount = list.filter(n => !n.readAt).length;
+        if (unreadOnly) list = list.filter(n => !n.readAt);
+        const start = (page - 1) * limit;
+        return {
+          total: list.length,
+          unreadCount,
+          items: list.slice(start, start + limit),
+        };
+      },
+      createNotification: async (entry) => {
+        const created = { id: newId(), ...entry, readAt: null, createdAt: new Date().toISOString() };
+        notificationLogs.unshift(created);
+        return created;
+      },
+      markNotificationRead: async (id, user) => {
+        const idx = notificationLogs.findIndex(n => n.id === id);
+        if (idx === -1) return null;
+        if (user.role === 'wali_murid' && notificationLogs[idx].recipientUserId !== user.id && notificationLogs[idx].studentId !== user.studentId) {
+          return null;
+        }
+        notificationLogs[idx] = { ...notificationLogs[idx], readAt: new Date().toISOString() };
+        return notificationLogs[idx];
+      },
+      markAllNotificationsRead: async (user) => {
+        let count = 0;
+        const now = new Date().toISOString();
+        const homeroomNames = new Set((user.homeroomClasses || []).map(c => c.name));
+        notificationLogs = notificationLogs.map(n => {
+          if (n.readAt) return n;
+          const visible =
+            ['admin', 'staff', 'kepsek'].includes(user.role) ||
+            n.recipientUserId === user.id ||
+            (user.role === 'wali_murid' && user.studentId && n.studentId === user.studentId) ||
+            (user.role === 'guru' && n.recipientRole === 'guru' && homeroomNames.has(n.className));
+          if (!visible) return n;
+          count++;
+          return { ...n, readAt: now };
+        });
+        return count;
+      },
+      logAudit,
+    })
+  );
+
+  router.use(
+    createOperationsRouter({
+      listPayments: async ({ status, kelas, search, studentId, page, limit }) => {
+        let list = [...pembayaranList];
+        if (studentId) list = list.filter(p => p.studentId === studentId);
+        if (status) list = list.filter(p => p.status === status);
+        if (kelas) list = list.filter(p => p.class === kelas);
+        if (search) {
+          const q = search.toLowerCase();
+          list = list.filter(
+            p =>
+              String(p.studentName || '').toLowerCase().includes(q) ||
+              String(p.month || '').toLowerCase().includes(q) ||
+              String(p.type || '').toLowerCase().includes(q)
+          );
+        }
+        const summary = list.reduce(
+          (acc, r) => {
+            acc.totalTagihan += Number(r.amount) || 0;
+            acc.totalTerbayar += Number(r.paid) || 0;
+            if (r.status === 'lunas') acc.countLunas++;
+            else if (r.status === 'cicilan') acc.countCicilan++;
+            else acc.countBelum++;
+            return acc;
+          },
+          { totalTagihan: 0, totalTerbayar: 0, totalTunggakan: 0, countLunas: 0, countCicilan: 0, countBelum: 0 }
+        );
+        summary.totalTunggakan = Math.max(0, summary.totalTagihan - summary.totalTerbayar);
+        const start = (page - 1) * limit;
+        return { total: list.length, summary, items: list.slice(start, start + limit) };
+      },
+      createPayment: async (body) => {
+        const student = siswaList.find(s => s.id === body.studentId);
+        if (!student) throw new Error('Data siswa tidak ditemukan.');
+        const created = {
+          id: newId(),
+          studentId: student.id,
+          studentName: student.name,
+          class: student.class || '-',
+          type: body.type,
+          month: body.month,
+          amount: body.amount,
+          paid: body.paid,
+          status: body.status,
+          date: body.date || null,
+        };
+        pembayaranList.unshift(created);
+        return created;
+      },
+      updatePayment: async (id, patch) => {
+        const idx = pembayaranList.findIndex(p => p.id === id);
+        if (idx === -1) return null;
+        const prev = pembayaranList[idx];
+        const nextAmount = patch.amount !== undefined ? patch.amount : prev.amount;
+        const nextPaid = patch.paid !== undefined ? patch.paid : prev.paid;
+        const nextStatus = patch.status || computePaymentStatus(nextAmount, nextPaid);
+        pembayaranList[idx] = {
+          ...prev,
+          ...(patch.type ? { type: patch.type } : {}),
+          ...(patch.month ? { month: patch.month } : {}),
+          amount: nextAmount,
+          paid: nextPaid,
+          status: nextStatus,
+          date:
+            patch.date !== undefined
+              ? patch.date
+              : nextPaid > prev.paid
+                ? getJakartaNow().dateStr
+                : prev.date,
+        };
+        return pembayaranList[idx];
+      },
+      deletePayment: async (id) => {
+        const target = pembayaranList.find(p => p.id === id);
+        if (!target) return null;
+        pembayaranList = pembayaranList.filter(p => p.id !== id);
+        return target;
+      },
+      listPrayerAttendance: async ({ date, kelas, studentId }) => {
+        let activeStudents = siswaList.filter(s => (s.status || 'aktif') === 'aktif');
+        if (studentId) activeStudents = activeStudents.filter(s => s.id === studentId);
+        if (kelas) activeStudents = activeStudents.filter(s => s.class === kelas);
+
+        const rowMap = new Map(
+          absenSholatList.filter(r => r.date === date).map(r => [r.studentId, r])
+        );
+        const items = activeStudents
+          .sort((a, b) => a.name.localeCompare(b.name))
+          .map(s => {
+            const saved = rowMap.get(s.id);
+            return {
+              id: saved?.id || `prayer-${s.id}-${date}`,
+              studentId: s.id,
+              studentName: s.name,
+              nis: s.nis || s.nomor || '-',
+              class: s.class || '-',
+              date,
+              dzuhur: Boolean(saved?.dzuhur),
+              ashar: Boolean(saved?.ashar),
+            };
+          });
+        return {
+          items,
+          summary: {
+            totalStudents: items.length,
+            dzuhurCount: items.filter(i => i.dzuhur).length,
+            asharCount: items.filter(i => i.ashar).length,
+            lengkapCount: items.filter(i => i.dzuhur && i.ashar).length,
+          },
+        };
+      },
+      savePrayerAttendanceBatch: async ({ date, records }) => {
+        let count = 0;
+        for (const rec of records) {
+          const student = siswaList.find(s => s.id === rec.studentId);
+          if (!student) continue;
+          const idx = absenSholatList.findIndex(r => r.studentId === rec.studentId && r.date === date);
+          if (idx !== -1) {
+            absenSholatList[idx] = {
+              ...absenSholatList[idx],
+              dzuhur: Boolean(rec.dzuhur),
+              ashar: Boolean(rec.ashar),
+            };
+          } else {
+            absenSholatList.push({
+              id: newId(),
+              studentId: student.id,
+              studentName: student.name,
+              class: student.class || '-',
+              date,
+              dzuhur: Boolean(rec.dzuhur),
+              ashar: Boolean(rec.ashar),
+            });
+          }
+          count++;
+        }
+        return { count };
+      },
+      logAudit,
+    })
+  );
 
   return router;
 }

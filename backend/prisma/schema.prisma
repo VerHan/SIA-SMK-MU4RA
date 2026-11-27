@@ -42,12 +42,14 @@ model User {
   username  String   @unique
   password  String
   name      String
-  role      String   // admin, guru, staff, wali_murid, kepsek
-  isPiket   Boolean  @default(false) // Hak akses khusus Guru Piket (hanya berlaku untuk role guru)
-  teacherId String?  // Link ke Guru (opsional, hanya untuk role guru)
-  studentId String?  // Link ke Siswa (opsional, hanya untuk role siswa/wali_murid)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  role         String   // admin, guru, staff, wali_murid, kepsek
+  isPiket      Boolean  @default(false) // Hak akses khusus Guru Piket (hanya berlaku untuk role guru)
+  isActive     Boolean  @default(true)  // Nonaktifkan akun untuk memutus akses seketika
+  tokenVersion Int      @default(1)     // Dinaikkan saat ganti password / revoke sesi agar sesi perangkat lama langsung terputus
+  teacherId    String?  // Link ke Guru (opsional, hanya untuk role guru)
+  studentId    String?  // Link ke Siswa (opsional, hanya untuk role siswa/wali_murid)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 
   // Relations
   guru                  Guru?           @relation(fields: [teacherId], references: [id], onDelete: SetNull)
@@ -356,10 +358,14 @@ model LogAktivitas {
   userId    String?
   userName  String?
   action    String
+  target    String?
   detail    String?
+  ipAddress String?
   createdAt DateTime @default(now())
 
   @@index([createdAt])
+  @@index([action])
+  @@index([userId])
 }
 
 model SystemHeartbeat {
@@ -453,4 +459,54 @@ model PpdbRegistration {
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 }
+
+model SchoolConfig {
+  id                 String    @id @default("school_default")
+  schoolName         String    @default("SMK Muhammadiyah 04 Bangsri")
+  npsn               String?   @default("20360584")
+  principalName      String?   @default("Kepala Sekolah")
+  address            String?   @default("Jl. KH. Ahmad Dahlan No. 04, Bangsri, Jepara")
+  phone              String?   @default("(0291) 771234")
+  email              String?   @default("info@smkmu4rabangsri.sch.id")
+  jamMasuk           String    @default("07:00")
+  jamPulang          String    @default("15:30")
+  batasTelatMenit    Int       @default(15)
+  geofenceLat        Float     @default(-6.5194526)
+  geofenceLng        Float     @default(110.7783316)
+  geofenceRadius     Int       @default(250)
+  whatsappEnabled    Boolean   @default(false)
+  whatsappWebhookUrl String?
+  notifyOnAlpha      Boolean   @default(true)
+  notifyOnBolos      Boolean   @default(true)
+  notifyHomeroom     Boolean   @default(true)
+  notifyParent       Boolean   @default(true)
+  dailyBackupEnabled Boolean   @default(true)
+  dailyBackupTime    String    @default("02:00")
+  lastBackupAt       DateTime?
+  updatedAt          DateTime  @updatedAt
+}
+
+model NotificationLog {
+  id              String    @id @default(uuid())
+  recipientRole   String    // admin, guru, wali_murid
+  recipientUserId String?
+  recipientName   String?
+  recipientPhone  String?
+  studentId       String?
+  studentName     String?
+  className       String?
+  eventType       String    // ALPHA_ALERT, BOLOS_ALERT, SYSTEM_TEST, GENERAL
+  title           String
+  message         String
+  channel         String    @default("in_app") // in_app, whatsapp_webhook
+  deliveryStatus  String    @default("sent")   // sent, skipped, failed, simulated
+  readAt          DateTime?
+  createdAt       DateTime  @default(now())
+
+  @@index([createdAt])
+  @@index([recipientRole, createdAt])
+  @@index([recipientUserId, readAt])
+  @@index([studentId, createdAt])
+}
+
 

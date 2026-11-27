@@ -5,6 +5,7 @@ import { PrismaClient } from '@prisma/client';
 import dotenv from 'dotenv';
 import { createMockApiRouter } from './mockStore.js';
 import { createExtraPrismaRoutes } from './extraPrismaRoutes.js';
+import { realtimeHub } from './modules/realtimeHub.js';
 import {
   attachAuth,
   buildUserCapabilities,
@@ -27,6 +28,16 @@ import {
   validateGeofenceCoords,
   verifyPasswordAsync,
 } from './authUtils.js';
+import {
+  buildMonthDateBounds,
+  buildPaginationMeta,
+  buildRolloverPlan,
+  getAcademicYearDateRange,
+  parsePaginationParams,
+  suggestClassMapping,
+} from './academicRolloverUtils.js';
+import { createPrismaBackendModules } from './modules/prismaAdapters.js';
+import { loginSchema, rolloverExecuteSchema, validateBody } from './validators/schemas.js';
 dotenv.config();
 
 const app = express();
@@ -139,10 +150,25 @@ app.post('/api/auth/change-password', changePasswordRateLimiter);
 app.post('/api/ppdb', ppdbRateLimiter);
 
 // When no external PostgreSQL database is configured, serve all /api/* routes from in-memory store
+let prismaModules = null;
 if (!prisma) {
   app.use('/api', createMockApiRouter());
 } else {
-  app.use('/api', createExtraPrismaRoutes(prisma, { getActiveTahunAjar }));
+  prismaModules = createPrismaBackendModules(prisma, {
+    getActiveTahunAjar,
+    invalidateGeofenceCache,
+  });
+  app.use('/api', prismaModules.tokenVersionGuard.middleware);
+  app.use('/api', createExtraPrismaRoutes(prisma, {
+    getActiveTahunAjar,
+    logAudit: prismaModules.logAudit,
+    invalidateUserSession: prismaModules.tokenVersionGuard.invalidateUserSession,
+    dispatchAttendanceNotifications: prismaModules.dispatchAttendanceNotifications,
+  }));
+  app.use('/api', prismaModules.auditRouter);
+  app.use('/api', prismaModules.schoolConfigRouter);
+  app.use('/api', prismaModules.operationsRouter);
+  app.use('/api', realtimeHub.createRouter());
 }
 
 // Endpoint untuk cek server jalan atau tidak
@@ -303,12 +329,9 @@ app.get('/api/keep-alive/status', async (req, res) => {
 // --- API ROUTES ---
 
 // 1. Auth Login (scrypt hashed password + seamless upgrade for legacy plaintext rows + signed JWT + HttpOnly cookie)
-app.post('/api/auth/login', async (req, res) => {
+app.post('/api/auth/login', validateBody(loginSchema), async (req, res) => {
   try {
-    const { username, password, rememberMe = true } = req.body || {};
-    if (!username || !password) {
-      return res.status(400).json({ success: false, error: 'Username dan password wajib diisi' });
-    }
+    const { username, password, rememberMe = true } = req.validatedBody;
 
     const cleanUsername = String(username).trim();
     let user = await prisma.user.findUnique({ where: { username: cleanUsername } });
@@ -319,6 +342,12 @@ app.post('/api/auth/login', async (req, res) => {
     }
     if (!user) {
       return res.status(401).json({ success: false, error: 'Username atau password salah' });
+    }
+    if (user.isActive === false) {
+      return res.status(403).json({
+        success: false,
+        error: 'Akun Anda sedang dinonaktifkan oleh administrator sekolah.',
+      });
     }
 
     const { valid, needsRehash } = await verifyPasswordAsync(password, user.password);
@@ -351,6 +380,8 @@ app.post('/api/auth/login', async (req, res) => {
       name: user.name,
       role: normalizedRole,
       isPiket,
+      isActive: user.isActive !== false,
+      tokenVersion: Number(user.tokenVersion) || 1,
       teacherId: user.teacherId || null,
       studentId: user.studentId || null,
       homeroomClasses,
@@ -863,8 +894,15 @@ const VALID_STUDENT_STATUSES = new Set(['aktif', 'lulus', 'pindah', 'nonaktif'])
 
 app.get('/api/siswa', requireAuth, async (req, res) => {
   try {
-    const { kelas, status, includeInactive } = req.query;
+    const { kelas, status, includeInactive, tahunAjarId, grade, search } = req.query;
+    const { isPaginated, page, limit, skip } = parsePaginationParams(req.query, { defaultLimit: 25, maxLimit: 200 });
     const whereCondition = {};
+
+    // Determine academic year filter for RiwayatKelas
+    const useExplicitYear = Boolean(tahunAjarId && tahunAjarId !== 'all');
+    const riwayatYearFilter = useExplicitYear
+      ? { tahunAjarId: String(tahunAjarId) }
+      : { tahunAjar: { isActive: true } };
 
     if (req.authUser.role === 'wali_murid') {
       whereCondition.id = req.authUser.studentId || '__no_linked_student__';
@@ -875,47 +913,104 @@ app.get('/api/siswa', requireAuth, async (req, res) => {
         whereCondition.status = 'aktif';
       }
 
-      if (kelas) {
-        whereCondition.riwayatKelas = {
-          some: {
-            kelas: { name: kelas },
-            tahunAjar: { isActive: true }
-          }
-        };
+      const riwayatMatch = { ...riwayatYearFilter };
+      let requireRiwayat = false;
+
+      if (kelas && kelas !== 'Semua') {
+        riwayatMatch.kelas = { ...(riwayatMatch.kelas || {}), name: String(kelas) };
+        requireRiwayat = true;
+      }
+      if (grade && grade !== 'Semua' && ['X', 'XI', 'XII'].includes(String(grade).toUpperCase())) {
+        riwayatMatch.kelas = { ...(riwayatMatch.kelas || {}), grade: String(grade).toUpperCase() };
+        requireRiwayat = true;
+      }
+      if (useExplicitYear && status !== 'lulus' && status !== 'all') {
+        requireRiwayat = true;
+      }
+      if (requireRiwayat) {
+        whereCondition.riwayatKelas = { some: riwayatMatch };
+      }
+
+      const cleanSearch = String(search || '').trim();
+      if (cleanSearch) {
+        whereCondition.OR = [
+          { name: { contains: cleanSearch, mode: 'insensitive' } },
+          { nomor: { contains: cleanSearch, mode: 'insensitive' } },
+        ];
       }
     }
 
-    const siswaList = await prisma.siswa.findMany({
-      where: whereCondition,
-      include: {
-        riwayatKelas: {
-          include: { kelas: true, tahunAjar: true },
-          where: { tahunAjar: { isActive: true } }
-        }
-      },
-      orderBy: { name: 'asc' }
-    });
-
-    const mapped = siswaList.map(s => {
-      const activeRiwayat = s.riwayatKelas?.[0];
-      const kelasName = activeRiwayat?.kelas?.name || '-';
+    const mapStudentRow = (s) => {
+      const targetRiwayat = s.riwayatKelas?.[0];
+      const kelasName = targetRiwayat?.kelas?.name || '-';
       return {
         id: s.id,
         nomor: s.nomor || '-',
-        nis: s.nomor || '-', // fallback kompatibilitas komponen
+        nis: s.nomor || '-',
         name: s.name,
         class: kelasName,
+        kelasId: targetRiwayat?.kelasId || null,
+        grade: targetRiwayat?.kelas?.grade || null,
         gender: s.gender,
         status: s.status || 'aktif',
         phone: s.phone || '-',
         phone_parent: s.phone_parent || '-',
         pekerjaan_ortu: s.pekerjaan_ortu || '-',
         alamat: s.alamat || '-',
-        sekolah_asal: s.sekolah_asal || '-'
+        sekolah_asal: s.sekolah_asal || '-',
       };
+    };
+
+    const riwayatInclude = {
+      include: { kelas: true, tahunAjar: true },
+      ...(tahunAjarId === 'all' ? { orderBy: { tahunAjar: { startDate: 'desc' } }, take: 1 } : { where: riwayatYearFilter, take: 1 }),
+    };
+
+    if (isPaginated) {
+      const baseCountsWhere = {};
+      if (req.authUser.role === 'wali_murid') {
+        baseCountsWhere.id = req.authUser.studentId || '__no_linked_student__';
+      }
+
+      const [total, siswaList, statusCountsRaw] = await Promise.all([
+        prisma.siswa.count({ where: whereCondition }),
+        prisma.siswa.findMany({
+          where: whereCondition,
+          include: { riwayatKelas: riwayatInclude },
+          orderBy: { name: 'asc' },
+          skip,
+          take: limit,
+        }),
+        prisma.siswa.groupBy({
+          by: ['status'],
+          where: baseCountsWhere,
+          _count: { _all: true },
+        }),
+      ]);
+
+      const counts = { aktif: 0, lulus: 0, pindah: 0, nonaktif: 0, total: 0 };
+      for (const row of statusCountsRaw) {
+        const key = row.status || 'aktif';
+        if (counts[key] !== undefined) counts[key] = row._count._all;
+        counts.total += row._count._all;
+      }
+
+      return res.json({
+        success: true,
+        items: siswaList.map(mapStudentRow),
+        pagination: buildPaginationMeta(total, page, limit),
+        counts,
+        tahunAjarId: useExplicitYear ? String(tahunAjarId) : null,
+      });
+    }
+
+    const siswaList = await prisma.siswa.findMany({
+      where: whereCondition,
+      include: { riwayatKelas: riwayatInclude },
+      orderBy: { name: 'asc' },
     });
 
-    res.json(mapped);
+    res.json(siswaList.map(mapStudentRow));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -1450,6 +1545,254 @@ app.get('/api/tahun-ajar', async (req, res) => {
   }
 });
 
+// GET — Pratinjau Tutup Semester & Kenaikan Kelas Massal (X -> XI -> XII -> Lulus)
+app.get('/api/tahun-ajar/rollover-preview', requireRole('admin'), async (req, res) => {
+  try {
+    const { sourceYearId, targetYearId, mode = 'promote' } = req.query;
+    const cleanMode = mode === 'semester' ? 'semester' : 'promote';
+
+    const [allYears, allClasses] = await Promise.all([
+      prisma.tahunAjar.findMany({ orderBy: [{ isActive: 'desc' }, { startDate: 'desc' }] }),
+      prisma.kelas.findMany({ orderBy: [{ grade: 'asc' }, { name: 'asc' }] }),
+    ]);
+
+    const sourceYear = sourceYearId
+      ? allYears.find(y => y.id === String(sourceYearId))
+      : (allYears.find(y => y.isActive) || allYears[0]);
+    if (!sourceYear) {
+      return res.status(404).json({ success: false, error: 'Tahun ajar sumber tidak ditemukan.' });
+    }
+
+    const targetYear = targetYearId ? allYears.find(y => y.id === String(targetYearId)) : null;
+
+    const [sourceEnrollments, targetEnrollments] = await Promise.all([
+      prisma.riwayatKelas.findMany({
+        where: {
+          tahunAjarId: sourceYear.id,
+          siswa: { status: 'aktif' },
+        },
+        include: {
+          siswa: { select: { id: true, name: true, nomor: true, gender: true, status: true } },
+          kelas: { select: { id: true, name: true, grade: true, major: true } },
+        },
+        orderBy: { siswa: { name: 'asc' } },
+      }),
+      targetYear
+        ? prisma.riwayatKelas.findMany({
+            where: { tahunAjarId: targetYear.id },
+            select: { siswaId: true, kelasId: true },
+          })
+        : Promise.resolve([]),
+    ]);
+
+    const alreadyEnrolledSet = new Set(targetEnrollments.map(e => e.siswaId));
+    const groupsMap = new Map();
+
+    for (const enr of sourceEnrollments) {
+      if (!enr.kelas || !enr.siswa) continue;
+      if (!groupsMap.has(enr.kelas.id)) {
+        groupsMap.set(enr.kelas.id, {
+          id: enr.kelas.id,
+          name: enr.kelas.name,
+          grade: enr.kelas.grade,
+          major: enr.kelas.major,
+          studentCount: 0,
+          students: [],
+        });
+      }
+      const grp = groupsMap.get(enr.kelas.id);
+      grp.studentCount++;
+      grp.students.push({
+        studentId: enr.siswa.id,
+        studentName: enr.siswa.name,
+        nis: enr.siswa.nomor || '-',
+        gender: enr.siswa.gender || 'L',
+        alreadyEnrolledInTarget: alreadyEnrolledSet.has(enr.siswa.id),
+      });
+    }
+
+    const groups = Array.from(groupsMap.values()).sort((a, b) =>
+      String(a.grade || '').localeCompare(String(b.grade || '')) || a.name.localeCompare(b.name)
+    );
+    const mappings = suggestClassMapping(groups, allClasses, cleanMode);
+
+    const flatEnrollments = sourceEnrollments.map(e => ({
+      studentId: e.siswaId,
+      studentName: e.siswa?.name || '-',
+      classId: e.kelasId,
+      className: e.kelas?.name || '-',
+    }));
+    const previewPlan = buildRolloverPlan({
+      enrollments: flatEnrollments,
+      mappings,
+      alreadyEnrolledStudentIds: Array.from(alreadyEnrolledSet),
+      validClassIds: allClasses.map(c => c.id),
+    });
+
+    res.json({
+      success: true,
+      mode: cleanMode,
+      sourceYear: {
+        id: sourceYear.id,
+        nama: sourceYear.nama,
+        semester: sourceYear.semester,
+        isActive: sourceYear.isActive,
+      },
+      targetYear: targetYear
+        ? { id: targetYear.id, nama: targetYear.nama, semester: targetYear.semester, isActive: targetYear.isActive }
+        : null,
+      classes: allClasses.map(c => ({ id: c.id, name: c.name, grade: c.grade, major: c.major })),
+      mappings,
+      groups,
+      summary: previewPlan.summary,
+      missingMappings: mappings.filter(m => m.action === 'promote' && !m.targetClassId).map(m => m.sourceClassName),
+    });
+  } catch (err) {
+    console.error('GET /api/tahun-ajar/rollover-preview error:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// POST — Eksekusi Atomik Tutup Semester & Kenaikan Kelas Massal
+app.post('/api/tahun-ajar/rollover', requireRole('admin'), async (req, res) => {
+  try {
+    const {
+      sourceYearId,
+      targetYearId,
+      mode = 'promote',
+      mappings = [],
+      retainStudentIds = [],
+      excludedStudentIds = [],
+      activateTargetYear = true,
+    } = req.body || {};
+
+    if (!sourceYearId || !targetYearId) {
+      return res.status(400).json({ success: false, error: 'Tahun ajar sumber dan tujuan wajib dipilih.' });
+    }
+    if (sourceYearId === targetYearId) {
+      return res.status(400).json({ success: false, error: 'Tahun ajar tujuan harus berbeda dari tahun ajar sumber.' });
+    }
+
+    const [sourceYear, targetYear, allClasses, sourceEnrollments] = await Promise.all([
+      prisma.tahunAjar.findUnique({ where: { id: String(sourceYearId) } }),
+      prisma.tahunAjar.findUnique({ where: { id: String(targetYearId) } }),
+      prisma.kelas.findMany({ select: { id: true, name: true, grade: true, major: true } }),
+      prisma.riwayatKelas.findMany({
+        where: { tahunAjarId: String(sourceYearId), siswa: { status: 'aktif' } },
+        include: {
+          siswa: { select: { id: true, name: true } },
+          kelas: { select: { id: true, name: true } },
+        },
+      }),
+    ]);
+
+    if (!sourceYear || !targetYear) {
+      return res.status(404).json({ success: false, error: 'Tahun ajar sumber atau tujuan tidak ditemukan.' });
+    }
+
+    const flatEnrollments = sourceEnrollments.map(e => ({
+      studentId: e.siswaId,
+      studentName: e.siswa?.name || '-',
+      classId: e.kelasId,
+      className: e.kelas?.name || '-',
+    }));
+
+    const plan = buildRolloverPlan({
+      enrollments: flatEnrollments,
+      mappings: Array.isArray(mappings) ? mappings : [],
+      retainStudentIds: Array.isArray(retainStudentIds) ? retainStudentIds : [],
+      excludedStudentIds: Array.isArray(excludedStudentIds) ? excludedStudentIds : [],
+      validClassIds: allClasses.map(c => c.id),
+    });
+
+    if (!plan.valid) {
+      return res.status(400).json({
+        success: false,
+        error: plan.errors[0] || 'Pemetaan kelas tujuan belum lengkap.',
+        errors: plan.errors,
+      });
+    }
+
+    const enrollActions = plan.actions.filter(a => ['promote', 'keep', 'retain'].includes(a.action) && a.targetClassId);
+    const graduateIds = plan.actions.filter(a => a.action === 'graduate').map(a => a.studentId);
+
+    await prisma.$transaction(async (tx) => {
+      for (const act of enrollActions) {
+        await tx.riwayatKelas.upsert({
+          where: {
+            siswaId_tahunAjarId: {
+              siswaId: act.studentId,
+              tahunAjarId: targetYear.id,
+            },
+          },
+          update: { kelasId: act.targetClassId },
+          create: {
+            siswaId: act.studentId,
+            kelasId: act.targetClassId,
+            tahunAjarId: targetYear.id,
+          },
+        });
+      }
+
+      if (graduateIds.length > 0) {
+        await tx.siswa.updateMany({
+          where: { id: { in: graduateIds } },
+          data: { status: 'lulus' },
+        });
+      }
+
+      if (activateTargetYear) {
+        await tx.tahunAjar.updateMany({ data: { isActive: false } });
+        await tx.tahunAjar.update({
+          where: { id: targetYear.id },
+          data: { isActive: true },
+        });
+
+        // Recalculate Kelas.totalStudents based on target year's RiwayatKelas
+        const countsByClass = await tx.riwayatKelas.groupBy({
+          by: ['kelasId'],
+          where: { tahunAjarId: targetYear.id, siswa: { status: 'aktif' } },
+          _count: { _all: true },
+        });
+        const countMap = new Map(countsByClass.map(c => [c.kelasId, c._count._all]));
+        for (const cls of allClasses) {
+          await tx.kelas.update({
+            where: { id: cls.id },
+            data: { totalStudents: countMap.get(cls.id) || 0 },
+          });
+        }
+      }
+
+      await tx.logAktivitas.create({
+        data: {
+          userId: req.authUser?.id || null,
+          userName: req.authUser?.name || req.authUser?.username || 'Admin',
+          action: 'BULK_ACADEMIC_ROLLOVER',
+          target: `${sourceYear.nama} Smt ${sourceYear.semester} -> ${targetYear.nama} Smt ${targetYear.semester}`,
+          detail: JSON.stringify({
+            mode,
+            activateTargetYear: Boolean(activateTargetYear),
+            summary: plan.summary,
+          }),
+          ipAddress: getClientIp(req),
+        },
+      });
+    });
+
+    invalidateActiveTahunAjarCache();
+
+    res.json({
+      success: true,
+      summary: plan.summary,
+      activatedTargetYear: Boolean(activateTargetYear),
+      message: `Proses ${mode === 'semester' ? 'Tutup Semester' : 'Kenaikan Kelas & Kelulusan'} berhasil: ${plan.summary.toPromote + plan.summary.toKeep} siswa dipindahkan, ${plan.summary.toGraduate} siswa diluluskan, ${plan.summary.toRetain} tinggal kelas.`,
+    });
+  } catch (err) {
+    console.error('POST /api/tahun-ajar/rollover error:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 app.post('/api/tahun-ajar', requireRole('admin'), async (req, res) => {
   try {
     const { nama, semester, startDate, endDate, isActive } = req.body;
@@ -1670,6 +2013,18 @@ app.post('/api/absensi-mapel', requireRole('admin', 'guru'), async (req, res) =>
 
     await prisma.$transaction(operations);
 
+    const affectedClassNames = [...new Set(
+      records.map(r => r.class || r.kelasName || studentMap.get(r.studentId)?.riwayatKelas?.[0]?.kelas?.name).filter(Boolean)
+    )];
+    const affectedStudentIds = [...new Set(records.map(r => r.studentId).filter(Boolean))];
+    realtimeHub.publish({
+      type: 'subject-attendance:updated',
+      classNames: affectedClassNames,
+      studentIds: affectedStudentIds,
+      date: records[0]?.date || null,
+      updatedBy: req.authUser?.name || null,
+    });
+
     res.json({ success: true, savedCount: operations.length, message: 'Absensi mapel berhasil disimpan.' });
   } catch (err) {
     console.error('POST /api/absensi-mapel error:', err);
@@ -1677,58 +2032,71 @@ app.post('/api/absensi-mapel', requireRole('admin', 'guru'), async (req, res) =>
   }
 });
 
-// GET — Ambil data absensi mapel (filter: kelas, mapel, tanggal, bulan)
+// GET — Ambil data absensi mapel (filter: tahunAjarId, kelas, mapel, tanggal, bulan + pagination opsional)
 app.get('/api/absensi-mapel', requireAuth, async (req, res) => {
   try {
-    const { kelas, mapel, date, month, studentId } = req.query;
-    let where = {};
+    const { kelas, mapel, date, month, studentId, tahunAjarId } = req.query;
+    const { isPaginated, page, limit, skip } = parsePaginationParams(req.query, { defaultLimit: 50, maxLimit: 200 });
+    const where = {};
+    const andClauses = [];
+
     if (req.authUser.role === 'wali_murid') {
       where.studentId = req.authUser.studentId || '__no_linked_student__';
     } else {
-      if (kelas) where.kelasName = kelas;
-      if (studentId) where.studentId = studentId;
+      if (kelas && kelas !== 'Semua') where.kelasName = String(kelas);
+      if (studentId) where.studentId = String(studentId);
     }
-    if (mapel) {
-      where.OR = [
-        { mapelId: mapel },
-        { mapel: { nama: mapel } },
-      ];
+    if (mapel && mapel !== 'Semua') {
+      andClauses.push({
+        OR: [
+          { mapelId: String(mapel) },
+          { mapel: { nama: String(mapel) } },
+        ],
+      });
     }
-    if (date) where.date = new Date(`${String(date).split('T')[0]}T00:00:00.000Z`);
-    if (month) {
-      const [y, m] = month.split('-');
-      const start = new Date(`${y}-${m}-01T00:00:00.000Z`);
-      const end = new Date(start);
-      end.setUTCMonth(end.getUTCMonth() + 1);
-      where.date = { gte: start, lt: end };
+    if (tahunAjarId && tahunAjarId !== 'all') {
+      const ta = await prisma.tahunAjar.findUnique({ where: { id: String(tahunAjarId) } });
+      const range = getAcademicYearDateRange(ta);
+      if (range) {
+        andClauses.push({
+          OR: [
+            { tahunAjarId: String(tahunAjarId) },
+            { tahunAjarId: null, date: { gte: range.startDate, lte: range.endDate } },
+          ],
+        });
+      } else {
+        where.tahunAjarId = String(tahunAjarId);
+      }
     }
+    if (date) {
+      where.date = new Date(`${String(date).split('T')[0]}T00:00:00.000Z`);
+    } else if (month && month !== 'all') {
+      const bounds = buildMonthDateBounds(month);
+      if (bounds) where.date = { gte: bounds.start, lt: bounds.end };
+    }
+    if (andClauses.length > 0) where.AND = andClauses;
 
-    const isUnbounded = !date && !month && !studentId;
-    const data = await prisma.absensiMapel.findMany({
-      where,
-      select: {
-        id: true,
-        studentId: true,
-        mapelId: true,
-        guruId: true,
-        kelasId: true,
-        kelasName: true,
-        recordedByUserId: true,
-        date: true,
-        jamKe: true,
-        status: true,
-        updatedAt: true,
-        student: { select: { name: true } },
-        mapel: { select: { nama: true } },
-        guru: { select: { name: true } },
-        kelas: { select: { id: true, name: true } },
-        recordedByUser: { select: { id: true, name: true } },
-      },
-      orderBy: [{ date: 'desc' }, { jamKe: 'asc' }],
-      ...(isUnbounded ? { take: 2500 } : {}),
-    });
+    const selectFields = {
+      id: true,
+      studentId: true,
+      mapelId: true,
+      guruId: true,
+      kelasId: true,
+      kelasName: true,
+      tahunAjarId: true,
+      recordedByUserId: true,
+      date: true,
+      jamKe: true,
+      status: true,
+      updatedAt: true,
+      student: { select: { name: true } },
+      mapel: { select: { nama: true } },
+      guru: { select: { name: true } },
+      kelas: { select: { id: true, name: true } },
+      recordedByUser: { select: { id: true, name: true } },
+    };
 
-    res.json(data.map(a => ({
+    const formatRow = (a) => ({
       id: a.id,
       studentId: a.studentId,
       studentName: a.student?.name || '-',
@@ -1738,96 +2106,197 @@ app.get('/api/absensi-mapel', requireAuth, async (req, res) => {
       teacherName: a.guru?.name || '-',
       kelasId: a.kelasId || null,
       class: a.kelas?.name || a.kelasName,
+      tahunAjarId: a.tahunAjarId || null,
       recordedByUserId: a.recordedByUserId || null,
       recordedByName: a.recordedByUser?.name || a.guru?.name || '-',
       date: a.date.toISOString().split('T')[0],
       jamKe: a.jamKe,
       status: a.status,
       updatedAt: a.updatedAt ? a.updatedAt.toISOString() : null,
-    })));
+    });
+
+    if (isPaginated) {
+      const [total, data] = await Promise.all([
+        prisma.absensiMapel.count({ where }),
+        prisma.absensiMapel.findMany({
+          where,
+          select: selectFields,
+          orderBy: [{ date: 'desc' }, { jamKe: 'asc' }],
+          skip,
+          take: limit,
+        }),
+      ]);
+      return res.json({
+        success: true,
+        items: data.map(formatRow),
+        pagination: buildPaginationMeta(total, page, limit),
+      });
+    }
+
+    const isUnbounded = !date && !month && !studentId;
+    const data = await prisma.absensiMapel.findMany({
+      where,
+      select: selectFields,
+      orderBy: [{ date: 'desc' }, { jamKe: 'asc' }],
+      ...(isUnbounded ? { take: 2500 } : {}),
+    });
+
+    res.json(data.map(formatRow));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// GET — Rekap bulanan per kelas per mapel
-// Persentase dihitung berdasarkan berapa kali guru benar-benar mengabsen
+// GET — Rekap Absensi Mapel dengan Agregasi Langsung di PostgreSQL (groupBy) + Pagination
 app.get('/api/absensi-mapel/rekap', requireRole('admin', 'guru', 'staff', 'kepsek'), async (req, res) => {
   try {
-    const { kelas, mapel, month } = req.query;
-    if (!kelas || !month) {
-      return res.json({ success: false, error: 'Parameter kelas dan month wajib' });
+    const { kelas, mapel, month, tahunAjarId, search } = req.query;
+    const { isPaginated, page, limit } = parsePaginationParams(req.query, { defaultLimit: 25, maxLimit: 200 });
+
+    const targetYear = tahunAjarId && tahunAjarId !== 'all'
+      ? await prisma.tahunAjar.findUnique({ where: { id: String(tahunAjarId) } })
+      : await getActiveTahunAjar();
+
+    const where = {};
+    const andClauses = [];
+
+    if (kelas && kelas !== 'Semua') where.kelasName = String(kelas);
+    if (mapel && mapel !== 'Semua' && mapel !== 'semua') {
+      andClauses.push({
+        OR: [
+          { mapelId: String(mapel) },
+          { mapel: { nama: String(mapel) } },
+        ],
+      });
+    }
+    if (month && month !== 'all') {
+      const bounds = buildMonthDateBounds(month);
+      if (bounds) where.date = { gte: bounds.start, lt: bounds.end };
+    }
+    if (targetYear && tahunAjarId !== 'all') {
+      const range = getAcademicYearDateRange(targetYear);
+      if (range) {
+        andClauses.push({
+          OR: [
+            { tahunAjarId: targetYear.id },
+            { tahunAjarId: null, date: { gte: range.startDate, lte: range.endDate } },
+          ],
+        });
+      } else {
+        where.tahunAjarId = targetYear.id;
+      }
+    }
+    if (andClauses.length > 0) where.AND = andClauses;
+
+    // DB-level PostgreSQL aggregation (no raw row scan into JS memory!)
+    const [groupedByStudentStatus, distinctSessions, overallByStatus] = await Promise.all([
+      prisma.absensiMapel.groupBy({
+        by: ['studentId', 'status'],
+        where,
+        _count: { _all: true },
+      }),
+      prisma.absensiMapel.groupBy({
+        by: ['date', 'jamKe', 'mapelId'],
+        where,
+        _count: { _all: true },
+      }),
+      prisma.absensiMapel.groupBy({
+        by: ['status'],
+        where,
+        _count: { _all: true },
+      }),
+    ]);
+
+    const totals = { hadir: 0, izin: 0, sakit: 0, alpha: 0, totalRecords: 0, attendanceRate: 0 };
+    for (const row of overallByStatus) {
+      if (totals[row.status] !== undefined) {
+        totals[row.status] = row._count._all;
+        totals.totalRecords += row._count._all;
+      }
+    }
+    totals.attendanceRate = totals.totalRecords > 0
+      ? Math.round((totals.hadir / totals.totalRecords) * 100)
+      : 0;
+
+    const studentIds = [...new Set(groupedByStudentStatus.map(g => g.studentId))];
+    const studentLookup = new Map();
+    if (studentIds.length > 0) {
+      const students = await prisma.siswa.findMany({
+        where: { id: { in: studentIds } },
+        select: {
+          id: true,
+          name: true,
+          nomor: true,
+          riwayatKelas: {
+            where: targetYear ? { tahunAjarId: targetYear.id } : { tahunAjar: { isActive: true } },
+            select: { kelas: { select: { name: true } } },
+            take: 1,
+          },
+        },
+      });
+      for (const st of students) {
+        studentLookup.set(st.id, {
+          name: st.name,
+          nis: st.nomor || '-',
+          className: st.riwayatKelas?.[0]?.kelas?.name || kelas || '-',
+        });
+      }
     }
 
-    const [y, m] = month.split('-');
-    const start = new Date(`${y}-${m}-01T00:00:00.000Z`);
-    const end = new Date(start);
-    end.setUTCMonth(end.getUTCMonth() + 1);
-
-    let where = {
-      kelasName: kelas,
-      date: { gte: start, lt: end }
-    };
-    if (mapel) where.mapelId = mapel;
-
-    const data = await prisma.absensiMapel.findMany({
-      where,
-      select: {
-        studentId: true,
-        kelasName: true,
-        date: true,
-        jamKe: true,
-        mapelId: true,
-        status: true,
-        student: { select: { name: true } },
-      },
-    });
-
-    // Hitung total sesi unik (tanggal + jamKe + mapelId)
-    const sesiSet = new Set();
-    data.forEach(a => sesiSet.add(`${a.date.toISOString().split('T')[0]}_${a.jamKe}_${a.mapelId}`));
-    const totalSesi = sesiSet.size;
-
-    // Hitung per siswa
-    const studentMap = {};
-    data.forEach(a => {
-      if (!studentMap[a.studentId]) {
-        studentMap[a.studentId] = {
-          studentId: a.studentId,
-          studentName: a.student.name,
-          class: a.kelasName,
-          hadir: 0, izin: 0, sakit: 0, alpha: 0
-        };
+    const studentMap = new Map();
+    for (const row of groupedByStudentStatus) {
+      if (!studentMap.has(row.studentId)) {
+        const meta = studentLookup.get(row.studentId) || { name: '-', nis: '-', className: kelas || '-' };
+        studentMap.set(row.studentId, {
+          studentId: row.studentId,
+          studentName: meta.name,
+          nis: meta.nis,
+          class: meta.className,
+          hadir: 0,
+          izin: 0,
+          sakit: 0,
+          alpha: 0,
+        });
       }
-      const s = studentMap[a.studentId];
-      if (a.status === 'hadir') s.hadir++;
-      else if (a.status === 'izin') s.izin++;
-      else if (a.status === 'sakit') s.sakit++;
-      else if (a.status === 'alpha') s.alpha++;
-    });
+      const entry = studentMap.get(row.studentId);
+      if (entry[row.status] !== undefined) {
+        entry[row.status] += row._count._all;
+      }
+    }
 
-    // Hitung persentase per mapel jika filter mapel aktif
-    // Jika tidak ada filter mapel, hitung total sesi per siswa
-    const rekap = Object.values(studentMap).map(s => {
+    const cleanSearch = String(search || '').trim().toLowerCase();
+    let rekapAll = Array.from(studentMap.values()).map(s => {
       const totalPerSiswa = s.hadir + s.izin + s.sakit + s.alpha;
       const persen = totalPerSiswa > 0 ? Math.round((s.hadir / totalPerSiswa) * 100) : 0;
-      return {
-        ...s,
-        totalSesi: totalPerSiswa,
-        persentase: persen
-      };
+      return { ...s, totalSesi: totalPerSiswa, persentase: persen };
     });
 
-    // Sort by name
-    rekap.sort((a, b) => a.studentName.localeCompare(b.studentName));
+    if (cleanSearch) {
+      rekapAll = rekapAll.filter(
+        r =>
+          r.studentName.toLowerCase().includes(cleanSearch) ||
+          String(r.nis || '').toLowerCase().includes(cleanSearch) ||
+          String(r.class || '').toLowerCase().includes(cleanSearch)
+      );
+    }
+
+    rekapAll.sort((a, b) => a.studentName.localeCompare(b.studentName));
+
+    const pagination = buildPaginationMeta(rekapAll.length, page, limit);
+    const rekap = isPaginated
+      ? rekapAll.slice((pagination.page - 1) * pagination.limit, pagination.page * pagination.limit)
+      : rekapAll;
 
     res.json({
       success: true,
-      totalSesiGuru: totalSesi,
-      kelas,
-      bulan: month,
+      totalSesiGuru: distinctSessions.length,
+      kelas: kelas || 'Semua',
+      bulan: month || 'all',
+      tahunAjarId: targetYear?.id || null,
       mapelId: mapel || 'semua',
-      rekap
+      totals,
+      rekap,
+      pagination,
     });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });

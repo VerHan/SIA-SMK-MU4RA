@@ -4,7 +4,7 @@
 
 import { useState, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { getUsers, addUser, updateUser, deleteUser, getTeachers, getStudents } from '../../services/api';
+import { getUsers, addUser, updateUser, deleteUser, revokeUserSessions, getTeachers, getStudents } from '../../services/api';
 import { useAuth } from '../../hooks/useAuth';
 import { ROLE_LABELS, USER_ROLES } from '../../config/constants';
 import Button from '../../components/ui/Button';
@@ -28,6 +28,7 @@ const EMPTY_FORM = {
   password: '',
   role: USER_ROLES.GURU,
   isPiket: false,
+  isActive: true,
   teacherId: '',
   studentId: '',
 };
@@ -66,6 +67,7 @@ export default function ManajemenAkunPage() {
   const [editingUser, setEditingUser] = useState(null);
   const [formData, setFormData] = useState(EMPTY_FORM);
   const [deleteTarget, setDeleteTarget] = useState(null);
+  const [revokeTarget, setRevokeTarget] = useState(null);
   const [toast, setToast] = useState(null);
 
   const { data: users = [], isLoading } = useQuery({
@@ -111,10 +113,25 @@ export default function ManajemenAkunPage() {
     onSuccess: (res) => {
       if (res.success) {
         queryClient.invalidateQueries({ queryKey: ['users'] });
+        queryClient.invalidateQueries({ queryKey: ['audit-logs'] });
         setDeleteTarget(null);
         setToast({ message: res.message || 'Akun berhasil dihapus.', type: 'success' });
       } else {
         setToast({ message: res.error || 'Gagal menghapus akun.', type: 'error' });
+      }
+    },
+  });
+
+  const revokeMutation = useMutation({
+    mutationFn: (id) => revokeUserSessions(id),
+    onSuccess: (res) => {
+      if (res.success) {
+        queryClient.invalidateQueries({ queryKey: ['users'] });
+        queryClient.invalidateQueries({ queryKey: ['audit-logs'] });
+        setRevokeTarget(null);
+        setToast({ message: res.message || 'Semua sesi aktif akun telah diputus.', type: 'success' });
+      } else {
+        setToast({ message: res.error || 'Gagal memutus sesi akun.', type: 'error' });
       }
     },
   });
@@ -152,6 +169,7 @@ export default function ManajemenAkunPage() {
       password: '',
       role: account.role || USER_ROLES.GURU,
       isPiket: Boolean(account.isPiket),
+      isActive: account.isActive !== false,
       teacherId: account.teacherId || '',
       studentId: account.studentId || '',
     });
@@ -182,6 +200,7 @@ export default function ManajemenAkunPage() {
       username: formData.username.trim(),
       role: formData.role,
       isPiket: formData.role === USER_ROLES.GURU ? Boolean(formData.isPiket) : false,
+      isActive: formData.isActive !== false,
       teacherId: formData.role === USER_ROLES.GURU ? (formData.teacherId || null) : null,
       studentId: formData.role === USER_ROLES.WALI_MURID ? (formData.studentId || null) : null,
     };
@@ -275,6 +294,7 @@ export default function ManajemenAkunPage() {
                 <th style={{ padding: '12px 16px', fontWeight: 600, color: 'var(--color-text-secondary)' }}>Nama Lengkap</th>
                 <th style={{ padding: '12px 16px', fontWeight: 600, color: 'var(--color-text-secondary)' }}>Username</th>
                 <th style={{ padding: '12px 16px', fontWeight: 600, color: 'var(--color-text-secondary)' }}>Peran</th>
+                <th style={{ padding: '12px 16px', fontWeight: 600, color: 'var(--color-text-secondary)' }}>Status & Sesi</th>
                 <th style={{ padding: '12px 16px', fontWeight: 600, color: 'var(--color-text-secondary)' }}>Relasi Data</th>
                 <th style={{ padding: '12px 16px', fontWeight: 600, color: 'var(--color-text-secondary)', textAlign: 'right' }}>Aksi</th>
               </tr>
@@ -283,14 +303,14 @@ export default function ManajemenAkunPage() {
               {isLoading ? (
                 Array.from({ length: 4 }).map((_, idx) => (
                   <tr key={idx} style={{ borderBottom: '1px solid var(--color-border-light)' }}>
-                    <td colSpan={5} style={{ padding: '16px' }}>
+                    <td colSpan={6} style={{ padding: '16px' }}>
                       <div style={{ height: '18px', borderRadius: '6px', background: 'var(--color-border-light)', width: '70%' }} />
                     </td>
                   </tr>
                 ))
               ) : filteredUsers.length === 0 ? (
                 <tr>
-                  <td colSpan={5} style={{ padding: '40px 16px', textAlign: 'center', color: 'var(--color-text-muted)' }}>
+                  <td colSpan={6} style={{ padding: '40px 16px', textAlign: 'center', color: 'var(--color-text-muted)' }}>
                     Tidak ada akun yang cocok dengan filter pencarian.
                   </td>
                 </tr>
@@ -298,8 +318,9 @@ export default function ManajemenAkunPage() {
                 filteredUsers.map((account) => {
                   const roleMeta = getRoleMeta(account.role);
                   const isSelf = currentUser?.id === account.id;
+                  const isActive = account.isActive !== false;
                   return (
-                    <tr key={account.id} style={{ borderBottom: '1px solid var(--color-border-light)' }}>
+                    <tr key={account.id} style={{ borderBottom: '1px solid var(--color-border-light)', opacity: isActive ? 1 : 0.72 }}>
                       <td style={{ padding: '14px 16px', fontWeight: 600, color: 'var(--color-text)' }}>
                         {account.name}
                         {isSelf && (
@@ -322,13 +343,32 @@ export default function ManajemenAkunPage() {
                           )}
                         </div>
                       </td>
+                      <td style={{ padding: '14px 16px', whiteSpace: 'nowrap' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                          <Badge variant={isActive ? 'success' : 'danger'}>
+                            {isActive ? 'Aktif' : 'Nonaktif'}
+                          </Badge>
+                          <span style={{ fontSize: '11px', fontFamily: 'monospace', color: 'var(--color-text-secondary)' }}>
+                            v{account.tokenVersion || 1}
+                          </span>
+                        </div>
+                      </td>
                       <td style={{ padding: '14px 16px', color: 'var(--color-text-secondary)', fontSize: 'var(--font-size-xs)' }}>
                         {getLinkedLabel(account)}
                       </td>
-                      <td style={{ padding: '14px 16px', textAlign: 'right' }}>
-                        <div style={{ display: 'inline-flex', gap: '8px' }}>
+                      <td style={{ padding: '14px 16px', textAlign: 'right', whiteSpace: 'nowrap' }}>
+                        <div style={{ display: 'inline-flex', gap: '6px', flexWrap: 'nowrap', justifyContent: 'flex-end', alignItems: 'center' }}>
                           <Button variant="secondary" size="xs" onClick={() => openEditModal(account)}>
                             Edit / Reset
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="xs"
+                            disabled={isSelf}
+                            title={isSelf ? 'Gunakan menu Ganti Password untuk memutus perangkat lain' : 'Putus semua sesi login akun ini seketika'}
+                            onClick={() => setRevokeTarget(account)}
+                          >
+                            Putus Sesi
                           </Button>
                           <Button
                             variant="danger"
@@ -471,6 +511,36 @@ export default function ManajemenAkunPage() {
             </div>
           )}
 
+          {editingUser && (
+            <label style={{
+              display: 'flex',
+              alignItems: 'flex-start',
+              gap: '10px',
+              padding: '12px 14px',
+              borderRadius: 'var(--radius-lg)',
+              border: '1px solid var(--color-border)',
+              background: formData.isActive ? '#ECFDF5' : '#FEF2F2',
+              cursor: currentUser?.id === editingUser.id ? 'not-allowed' : 'pointer',
+              opacity: currentUser?.id === editingUser.id ? 0.7 : 1,
+            }}>
+              <input
+                type="checkbox"
+                disabled={currentUser?.id === editingUser.id}
+                checked={formData.isActive !== false}
+                onChange={(e) => setFormData({ ...formData, isActive: e.target.checked })}
+                style={{ marginTop: '3px', width: '16px', height: '16px' }}
+              />
+              <span>
+                <strong style={{ display: 'block', fontSize: 'var(--font-size-sm)', color: 'var(--color-text)' }}>
+                  Status Akun Aktif
+                </strong>
+                <span style={{ fontSize: 'var(--font-size-xs)', color: 'var(--color-text-secondary)', lineHeight: 1.4, display: 'block', marginTop: '2px' }}>
+                  Jika dinonaktifkan, seluruh sesi perangkat aktif akun ini langsung diputus otomatis dan pengguna tidak dapat masuk kembali.
+                </span>
+              </span>
+            </label>
+          )}
+
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 'var(--space-2)', marginTop: 'var(--space-2)' }}>
             <Button variant="ghost" onClick={() => setIsModalOpen(false)}>Batal</Button>
             <Button type="submit" loading={saveMutation.isPending}>
@@ -478,6 +548,28 @@ export default function ManajemenAkunPage() {
             </Button>
           </div>
         </form>
+      </Modal>
+
+      {/* Revoke Sessions Confirmation Modal */}
+      <Modal
+        isOpen={Boolean(revokeTarget)}
+        onClose={() => setRevokeTarget(null)}
+        title="Konfirmasi Putus Semua Sesi"
+        size="sm"
+      >
+        <p style={{ fontSize: 'var(--font-size-sm)', color: 'var(--color-text-secondary)', marginBottom: 'var(--space-5)', lineHeight: 1.6 }}>
+          Putus paksa semua sesi login aktif milik <strong>{revokeTarget?.name}</strong> (@{revokeTarget?.username}) di semua HP dan komputer? Pengguna akan diminta login ulang seketika.
+        </p>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 'var(--space-2)' }}>
+          <Button variant="ghost" onClick={() => setRevokeTarget(null)}>Batal</Button>
+          <Button
+            variant="danger"
+            loading={revokeMutation.isPending}
+            onClick={() => revokeTarget && revokeMutation.mutate(revokeTarget.id)}
+          >
+            Ya, Putus Semua Sesi
+          </Button>
+        </div>
       </Modal>
 
       {/* Delete Confirmation Modal */}

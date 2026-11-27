@@ -1,5 +1,7 @@
 import { useState, useEffect } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { getStudents, getClasses, saveSubjectAttendance, getMasterTimeSlots, getSchedule, getAcademicCalendarByDate } from '../../services/api';
+import { invalidateAttendanceQueries } from '../../hooks/useRealtimeSync';
 import Card from '../../components/ui/Card';
 import Table from '../../components/ui/Table';
 import Button from '../../components/ui/Button';
@@ -7,6 +9,7 @@ import Toast from '../../components/ui/Toast';
 import LoadingSpinner from '../../components/ui/LoadingSpinner';
 
 export default function GuruAbsenMapelPage() {
+  const queryClient = useQueryClient();
   const [classes, setClasses] = useState([]);
   const [students, setStudents] = useState([]);
   
@@ -118,6 +121,7 @@ export default function GuruAbsenMapelPage() {
     setSubmitting(false);
 
     if (res.success) {
+      invalidateAttendanceQueries(queryClient);
       setToast({ type: 'success', message: 'Absensi Mata Pelajaran berhasil disimpan!' });
     } else {
       setToast({ type: 'error', message: 'Gagal menyimpan absensi mapel.' });

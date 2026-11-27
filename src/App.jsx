@@ -6,6 +6,7 @@ import React, { Suspense, lazy, useEffect } from 'react';
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { AuthProvider } from './context/AuthContext';
 import { useAuth } from './hooks/useAuth';
+import { useRealtimeSync } from './hooks/useRealtimeSync';
 import { isStandalonePWA } from './hooks/usePWAInstall';
 import { getResumePathForUser, saveLastRoute } from './utils/sessionRouting';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -168,11 +169,17 @@ function RootRedirect() {
   return <Navigate to={getResumePathForUser(user)} replace />;
 }
 
+function RealtimeSyncBridge() {
+  useRealtimeSync();
+  return null;
+}
+
 export default function App() {
   return (
     <ErrorBoundary>
       <QueryClientProvider client={queryClient}>
         <AuthProvider>
+          <RealtimeSyncBridge />
           <BrowserRouter>
             <LastRouteTracker />
             <OfflineIndicator />

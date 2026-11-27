@@ -116,6 +116,7 @@ export default function AttendanceTrendChart({
   sesi = 'pagi',
   month = '',
   selectedDate = '',
+  tahunAjarId = '',
   preloadedRecords = null,
   onSelectDate,
   onJumpToMonth,
@@ -152,10 +153,11 @@ export default function AttendanceTrendChart({
     }
 
     setLoading(true);
+    const yearOpts = tahunAjarId ? { tahunAjarId } : {};
     const fetcher =
       activeTab === 'piket'
-        ? getAttendance(classFilter, null, month)
-        : getSubjectAttendance(classFilter, null, selectedSubject || null, month);
+        ? getAttendance(classFilter, null, month, yearOpts)
+        : getSubjectAttendance(classFilter, null, selectedSubject || null, month, yearOpts);
 
     fetcher.then(data => {
       if (cancelled) return;
@@ -166,7 +168,7 @@ export default function AttendanceTrendChart({
     return () => {
       cancelled = true;
     };
-  }, [activeTab, selectedClass, selectedSubject, month, scope, canReusePreloaded, preloadedRecords]);
+  }, [activeTab, selectedClass, selectedSubject, month, tahunAjarId, scope, canReusePreloaded, preloadedRecords]);
 
   const { series, summary } = useMemo(
     () => buildDailyAttendanceTrends(records, { mode: activeTab, session: sesi, rangeDays }),
@@ -182,10 +184,11 @@ export default function AttendanceTrendChart({
     }
 
     const classFilter = scope === 'class' ? selectedClass : null;
+    const yearOpts = tahunAjarId ? { tahunAjarId } : {};
     const probe =
       activeTab === 'piket'
-        ? getAttendance(classFilter)
-        : getSubjectAttendance(classFilter, null, selectedSubject || null);
+        ? getAttendance(classFilter, null, null, yearOpts)
+        : getSubjectAttendance(classFilter, null, selectedSubject || null, null, yearOpts);
 
     probe.then(allRows => {
       if (cancelled || !Array.isArray(allRows) || allRows.length === 0) return;

@@ -8,10 +8,12 @@
    - Export & Import Excel
    ============================================================ */
 
-import { useState, useRef, useMemo } from 'react';
+import { useState, useRef, useMemo, useEffect } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   getStudents,
+  getStudentsPaginated,
+  getAcademicYears,
   addStudent,
   updateStudent,
   deleteStudent,
@@ -27,6 +29,7 @@ import Modal from '../../components/ui/Modal';
 import Badge from '../../components/ui/Badge';
 import Toast from '../../components/ui/Toast';
 import LoadingSpinner from '../../components/ui/LoadingSpinner';
+import PaginationBar from '../../components/ui/PaginationBar';
 
 const STUDENT_STATUS_META = {
   aktif: { label: 'Aktif', variant: 'success' },
@@ -58,9 +61,13 @@ const EMPTY_FORM = {
 export default function DataSiswaPage() {
   const queryClient = useQueryClient();
   const [searchQuery, setSearchQuery] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
   const [selectedGrade, setSelectedGrade] = useState('Semua');
   const [selectedClass, setSelectedClass] = useState('Semua');
   const [selectedStatus, setSelectedStatus] = useState('aktif');
+  const [selectedYearId, setSelectedYearId] = useState('');
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(25);
 
   /* Modal form (Tambah / Edit) */
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -80,9 +87,39 @@ export default function DataSiswaPage() {
 
   const fileInputRef = useRef(null);
 
-  const { data: students = [], isLoading: loadingStudents } = useQuery({
-    queryKey: ['students', 'all'],
-    queryFn: () => getStudents(null, { includeInactive: true }),
+  useEffect(() => {
+    const t = setTimeout(() => {
+      setDebouncedSearch(searchQuery);
+      setPage(1);
+    }, 250);
+    return () => clearTimeout(t);
+  }, [searchQuery]);
+
+  const { data: academicYears = [] } = useQuery({
+    queryKey: ['academic-years'],
+    queryFn: getAcademicYears,
+  });
+
+  useEffect(() => {
+    if (!selectedYearId && academicYears.length > 0) {
+      const active = academicYears.find(y => y.isActive) || academicYears[0];
+      if (active?.id) setSelectedYearId(active.id);
+    }
+  }, [academicYears, selectedYearId]);
+
+  const { data: paginatedResult, isLoading: loadingStudents } = useQuery({
+    queryKey: ['students', 'paginated', page, pageSize, selectedClass, selectedGrade, selectedStatus, debouncedSearch, selectedYearId],
+    queryFn: () =>
+      getStudentsPaginated({
+        page,
+        limit: pageSize,
+        kelas: selectedClass,
+        grade: selectedGrade,
+        status: selectedStatus,
+        search: debouncedSearch,
+        tahunAjarId: selectedYearId || undefined,
+      }),
+    placeholderData: (prev) => prev,
   });
 
   const { data: classes = [], isLoading: loadingClasses } = useQuery({
@@ -95,6 +132,10 @@ export default function DataSiswaPage() {
     queryFn: () => getStudentAttendanceDetail(detailStudent.id, detailMonth || 'all'),
     enabled: Boolean(detailStudent?.id),
   });
+
+  const pagedStudents = paginatedResult?.items || [];
+  const pagination = paginatedResult?.pagination || { page, limit: pageSize, total: 0, totalPages: 1, hasNext: false, hasPrev: false };
+  const serverCounts = paginatedResult?.counts || { aktif: 0, lulus: 0, pindah: 0, nonaktif: 0, total: 0 };
 
   const invalidateStudents = () => {
     queryClient.invalidateQueries({ queryKey: ['students'] });
@@ -177,9 +218,16 @@ export default function DataSiswaPage() {
     }
   };
 
-  /* === Export & Import Excel (lazy-loaded on demand) === */
+  /* === Export & Import Excel (lazy-loaded on demand; fetches complete filtered dataset) === */
   const handleExport = async () => {
-    let exportData = filteredStudents.map(s => ({
+    const allFiltered = await getStudents(selectedClass, {
+      status: selectedStatus,
+      includeInactive: selectedStatus !== 'aktif',
+      grade: selectedGrade,
+      search: debouncedSearch,
+      tahunAjarId: selectedYearId || undefined,
+    });
+    let exportData = allFiltered.map(s => ({
       'NIS / Nomor': s.nomor !== '-' ? s.nomor : '',
       'Kelas': s.class || '',
       'Nama Lengkap': s.name || '',
@@ -256,37 +304,22 @@ export default function DataSiswaPage() {
     e.target.value = null;
   };
 
-  /* Filter list */
-  const filteredStudents = useMemo(() => {
-    const q = searchQuery.trim().toLowerCase();
-    return students.filter(s => {
-      const sClass = s.class || '';
-      const sGrade = sClass ? sClass.split(' ')[0] : '';
-      const sStatus = s.status || 'aktif';
-      const matchStatus = selectedStatus === 'all' || sStatus === selectedStatus;
-      const matchGrade = selectedGrade === 'Semua' || sGrade === selectedGrade;
-      const matchClass = selectedClass === 'Semua' || sClass === selectedClass;
-      const matchSearch =
-        !q ||
-        (s.name || '').toLowerCase().includes(q) ||
-        (s.nomor && String(s.nomor).toLowerCase().includes(q));
-      return matchStatus && matchGrade && matchClass && matchSearch;
-    });
-  }, [students, selectedStatus, selectedGrade, selectedClass, searchQuery]);
-
   const statusCounts = useMemo(() => ({
-    aktif: students.filter(s => (s.status || 'aktif') === 'aktif').length,
-    nonaktif: students.filter(s => (s.status || 'aktif') !== 'aktif').length,
-  }), [students]);
+    aktif: serverCounts.aktif || 0,
+    lulus: serverCounts.lulus || 0,
+    nonaktif: (serverCounts.lulus || 0) + (serverCounts.pindah || 0) + (serverCounts.nonaktif || 0),
+  }), [serverCounts]);
 
   const availableClasses = classes.filter(c => {
     if (selectedGrade === 'Semua') return true;
     return (c.name || '').split(' ')[0] === selectedGrade;
   });
 
+  const rowOffset = (pagination.page - 1) * pagination.limit;
+
   const columns = [
-    { key: 'no', label: 'No', width: '44px', render: (_, __, i) => <span style={{ fontVariantNumeric: 'tabular-nums' }}>{i + 1}</span> },
-    { key: 'class', label: 'Kelas', width: '100px', render: (val) => <Badge variant="primary">{val || '-'}</Badge> },
+    { key: 'no', label: 'No', width: '44px', render: (_, __, i) => <span style={{ fontVariantNumeric: 'tabular-nums' }}>{rowOffset + i + 1}</span> },
+    { key: 'class', label: 'Kelas', width: '116px', render: (val) => <span style={{ whiteSpace: 'nowrap' }}><Badge variant="primary">{val || '-'}</Badge></span> },
     {
       key: 'name',
       label: 'Siswa',
@@ -383,6 +416,7 @@ export default function DataSiswaPage() {
             onClick={() => {
               setSelectedGrade(grade);
               setSelectedClass('Semua');
+              setPage(1);
             }}
             style={{
               padding: 'var(--space-3) var(--space-5)',
@@ -403,7 +437,35 @@ export default function DataSiswaPage() {
 
       {/* Filter & Search Bar */}
       <Card style={{ marginBottom: 'var(--space-6)' }}>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', gap: 'var(--space-4)', alignItems: 'center' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 'var(--space-4)', alignItems: 'center' }}>
+          <div>
+            <label style={{ display: 'block', fontSize: 'var(--font-size-xs)', fontWeight: 600, color: 'var(--color-text-muted)', marginBottom: '4px', textTransform: 'uppercase' }}>
+              Tahun Ajaran
+            </label>
+            <select
+              value={selectedYearId}
+              onChange={(e) => {
+                setSelectedYearId(e.target.value);
+                setPage(1);
+              }}
+              style={{
+                width: '100%',
+                padding: '9px 12px',
+                borderRadius: 'var(--radius-md)',
+                border: '1px solid var(--color-border)',
+                fontSize: 'var(--font-size-sm)',
+                background: 'var(--color-surface)',
+              }}
+            >
+              {academicYears.map(y => (
+                <option key={y.id} value={y.id}>
+                  {y.nama} Smt {y.semester} {y.isActive ? '(Aktif)' : ''}
+                </option>
+              ))}
+              <option value="all">Semua Periode (Arsip)</option>
+            </select>
+          </div>
+
           <div>
             <label style={{ display: 'block', fontSize: 'var(--font-size-xs)', fontWeight: 600, color: 'var(--color-text-muted)', marginBottom: '4px', textTransform: 'uppercase' }}>
               Cari Nama / NIS
@@ -430,7 +492,10 @@ export default function DataSiswaPage() {
             </label>
             <select
               value={selectedClass}
-              onChange={(e) => setSelectedClass(e.target.value)}
+              onChange={(e) => {
+                setSelectedClass(e.target.value);
+                setPage(1);
+              }}
               style={{
                 width: '100%',
                 padding: '9px 12px',
@@ -440,7 +505,7 @@ export default function DataSiswaPage() {
                 background: 'var(--color-surface)',
               }}
             >
-              <option value="Semua">Semua Kelas ({filteredStudents.length} Siswa)</option>
+              <option value="Semua">Semua Kelas ({pagination.total} Siswa)</option>
               {availableClasses.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
             </select>
           </div>
@@ -451,7 +516,10 @@ export default function DataSiswaPage() {
             </label>
             <select
               value={selectedStatus}
-              onChange={(e) => setSelectedStatus(e.target.value)}
+              onChange={(e) => {
+                setSelectedStatus(e.target.value);
+                setPage(1);
+              }}
               style={{
                 width: '100%',
                 padding: '9px 12px',
@@ -461,22 +529,33 @@ export default function DataSiswaPage() {
                 background: 'var(--color-surface)',
               }}
             >
-              <option value="aktif">Aktif Saja</option>
-              <option value="all">Semua Status</option>
-              <option value="lulus">Lulus</option>
-              <option value="pindah">Pindah</option>
-              <option value="nonaktif">Nonaktif / Arsip</option>
+              <option value="aktif">Aktif Saja ({serverCounts.aktif || 0})</option>
+              <option value="all">Semua Status ({serverCounts.total || 0})</option>
+              <option value="lulus">Lulus / Alumni ({serverCounts.lulus || 0})</option>
+              <option value="pindah">Pindah ({serverCounts.pindah || 0})</option>
+              <option value="nonaktif">Nonaktif / Arsip ({serverCounts.nonaktif || 0})</option>
             </select>
           </div>
         </div>
       </Card>
 
-      {/* Student Table */}
+      {/* Student Table + Server-Side Pagination */}
       <Card padding="0">
         {loading || submitting ? (
           <LoadingSpinner message={submitting ? 'Memproses data...' : 'Memuat data siswa...'} />
         ) : (
-          <Table columns={columns} data={filteredStudents} emptyMessage="Tidak ada data siswa ditemukan." />
+          <>
+            <Table columns={columns} data={pagedStudents} emptyMessage="Tidak ada data siswa ditemukan untuk periode/filter ini." />
+            <PaginationBar
+              pagination={pagination}
+              onPageChange={(nextPage) => setPage(nextPage)}
+              onLimitChange={(nextLimit) => {
+                setPageSize(nextLimit);
+                setPage(1);
+              }}
+              itemLabel="siswa"
+            />
+          </>
         )}
       </Card>
 

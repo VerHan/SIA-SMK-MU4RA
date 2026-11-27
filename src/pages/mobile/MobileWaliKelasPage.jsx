@@ -21,6 +21,7 @@ export default function MobileWaliKelasPage() {
   const { data, isLoading } = useQuery({
     queryKey: ['homeroom-monitoring', selectedClass, month],
     queryFn: () => getHomeroomMonitoring(selectedClass || undefined, month),
+    placeholderData: (prev) => prev,
   });
 
   const classes = data?.classes || [];
@@ -40,7 +41,7 @@ export default function MobileWaliKelasPage() {
         <div style={{ fontSize: '11px', opacity: 0.9, fontWeight: 600, textTransform: 'uppercase' }}>
           Monitoring Wali Kelas
         </div>
-        <h1 style={{ fontSize: '18px', fontWeight: 800, marginTop: '4px' }}>
+        <h1 style={{ fontSize: '18px', fontWeight: 800, marginTop: '4px', color: '#FFFFFF' }}>
           Kondisi Kehadiran {activeClass !== '-' ? `Kelas ${activeClass}` : 'Kelas Binaan'}
         </h1>
         <p style={{ fontSize: '12px', opacity: 0.9, marginTop: '4px', lineHeight: 1.4 }}>

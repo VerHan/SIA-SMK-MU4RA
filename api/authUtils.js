@@ -291,12 +291,16 @@ export function signToken(user, { rememberMe = true } = {}) {
     : [];
   const role = normalizeRole(user.role);
   const isPiket = role === 'guru' ? Boolean(user.isPiket) : false;
+  const tokenVersion = Number.isInteger(Number(user.tokenVersion)) && Number(user.tokenVersion) > 0
+    ? Number(user.tokenVersion)
+    : 1;
   const payload = base64UrlEncode(JSON.stringify({
     sub: user.id,
     username: user.username,
     name: user.name,
     role,
     isPiket,
+    tv: tokenVersion,
     teacherId: user.teacherId || null,
     studentId: user.studentId || null,
     homeroomClasses,
@@ -335,12 +339,16 @@ export function verifyToken(token) {
 
     const role = normalizeRole(decoded.role);
     const homeroomClasses = Array.isArray(decoded.homeroomClasses) ? decoded.homeroomClasses : [];
+    const tokenVersion = Number.isInteger(Number(decoded.tv)) && Number(decoded.tv) > 0
+      ? Number(decoded.tv)
+      : 1;
     const baseUser = {
       id: decoded.sub,
       username: decoded.username,
       name: decoded.name,
       role,
       isPiket: role === 'guru' ? Boolean(decoded.isPiket) : false,
+      tokenVersion,
       teacherId: decoded.teacherId || null,
       studentId: decoded.studentId || null,
       homeroomClasses,
@@ -595,6 +603,91 @@ export function sanitizeSafeUrl(value) {
     return null;
   }
   return null;
+}
+
+function isPrivateOrBlockedHost(hostname) {
+  const host = String(hostname || '').trim().toLowerCase().replace(/^\[|\]$/g, '');
+  if (!host) return true;
+  if (
+    host === 'localhost' ||
+    host === '0.0.0.0' ||
+    host === '::1' ||
+    host === '::' ||
+    host.endsWith('.localhost') ||
+    host.endsWith('.local') ||
+    host.endsWith('.internal') ||
+    host === 'metadata.google.internal'
+  ) {
+    return true;
+  }
+
+  // IPv6 private / link-local / unique-local ranges
+  if (host.includes(':')) {
+    if (
+      host.startsWith('fc') ||
+      host.startsWith('fd') ||
+      host.startsWith('fe8') ||
+      host.startsWith('fe9') ||
+      host.startsWith('fea') ||
+      host.startsWith('feb') ||
+      host.startsWith('::ffff:127.') ||
+      host.startsWith('::ffff:10.') ||
+      host.startsWith('::ffff:169.254.') ||
+      host.startsWith('::ffff:192.168.')
+    ) {
+      return true;
+    }
+    return false;
+  }
+
+  // IPv4 literal checks (loopback, RFC1918, link-local / cloud metadata, CGNAT)
+  const ipv4Match = host.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+  if (ipv4Match) {
+    const [a, b] = [Number(ipv4Match[1]), Number(ipv4Match[2])];
+    if (
+      a === 0 ||
+      a === 10 ||
+      a === 127 ||
+      (a === 169 && b === 254) ||
+      (a === 172 && b >= 16 && b <= 31) ||
+      (a === 192 && b === 168) ||
+      (a === 100 && b >= 64 && b <= 127)
+    ) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+/**
+ * Validate outbound webhook URL (HTTPS preferred; strictly blocks loopback, private LAN,
+ * and cloud metadata endpoints to prevent outbound request forgery).
+ */
+export function validateSafeWebhookUrl(rawUrl) {
+  if (rawUrl === null || rawUrl === undefined || String(rawUrl).trim() === '') {
+    return { valid: true, url: '' };
+  }
+  const trimmed = String(rawUrl).trim();
+  let parsed;
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    return { valid: false, error: 'Format URL webhook tidak valid. Gunakan alamat https:// yang lengkap.' };
+  }
+  if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
+    return { valid: false, error: 'URL webhook hanya mendukung protokol https:// atau http://.' };
+  }
+  if (parsed.username || parsed.password) {
+    return { valid: false, error: 'URL webhook tidak boleh mengandung kredensial langsung di alamat.' };
+  }
+  if (isPrivateOrBlockedHost(parsed.hostname)) {
+    return {
+      valid: false,
+      error: 'URL webhook ke jaringan lokal/internal tidak diizinkan demi keamanan server.',
+    };
+  }
+  return { valid: true, url: parsed.toString() };
 }
 
 /**

@@ -4,7 +4,9 @@
    ============================================================ */
 
 import { useState, useEffect } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { getClasses, getStudents, getAttendance, saveAttendance } from '../../services/api';
+import { invalidateAttendanceQueries } from '../../hooks/useRealtimeSync';
 import Toast from '../../components/ui/Toast';
 
 const STATUS_OPTS = [
@@ -15,6 +17,7 @@ const STATUS_OPTS = [
 ];
 
 export default function MobileAbsenPiketPage() {
+  const queryClient = useQueryClient();
   const [classes, setClasses] = useState([]);
   const [selectedClass, setSelectedClass] = useState('');
   const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
@@ -116,6 +119,7 @@ export default function MobileAbsenPiketPage() {
           return next;
         });
       }
+      invalidateAttendanceQueries(queryClient);
       setToast({ message: `Absen piket ${sesi} (${selectedClass}) tersimpan!`, type: 'success' });
     } else if (res.conflict) {
       setConflictMsg(res.error || 'Data sesi ini baru saja diubah petugas piket lain.');
@@ -138,7 +142,7 @@ export default function MobileAbsenPiketPage() {
         <div style={{ fontSize: '11px', opacity: 0.9, fontWeight: 600, textTransform: 'uppercase' }}>
           Tugas Khusus Guru Piket
         </div>
-        <h1 style={{ fontSize: '18px', fontWeight: 800, marginTop: '4px' }}>
+        <h1 style={{ fontSize: '18px', fontWeight: 800, marginTop: '4px', color: '#FFFFFF' }}>
           Absensi Piket Pagi & Sore
         </h1>
         <p style={{ fontSize: '12px', opacity: 0.9, marginTop: '4px', lineHeight: 1.4 }}>

@@ -5,8 +5,6 @@
    ============================================================ */
 
 import {
-  MOCK_PRAYER_ATTENDANCE,
-  MOCK_PAYMENTS,
   MOCK_SUBJECT_TEACHERS,
   MOCK_TEACHER_DUTIES,
   MOCK_DUTY_SCHEDULE,
@@ -227,6 +225,15 @@ export async function deleteUser(id) {
   }
 }
 
+export async function revokeUserSessions(id) {
+  try {
+    const res = await apiFetch(`/api/users/${encodeURIComponent(id)}/revoke-sessions`, { method: 'POST' });
+    return formatMutationResponse(res, 'Gagal memutus sesi aktif akun.');
+  } catch {
+    return { success: false, error: 'Gagal menghubungi server.' };
+  }
+}
+
 /* ============================================================
    TAHUN AJAR
    ============================================================ */
@@ -277,6 +284,29 @@ export async function setActiveAcademicYear(id) {
   try {
     const res = await apiFetch(`/api/tahun-ajar/${encodeURIComponent(id)}/activate`, { method: 'PUT' });
     return formatMutationResponse(res, 'Gagal mengaktifkan tahun ajar.');
+  } catch {
+    return { success: false, error: 'Gagal menghubungi server.' };
+  }
+}
+
+export async function getRolloverPreview({ sourceYearId, targetYearId, mode = 'promote' } = {}) {
+  try {
+    const params = new URLSearchParams();
+    if (sourceYearId) params.set('sourceYearId', sourceYearId);
+    if (targetYearId) params.set('targetYearId', targetYearId);
+    if (mode) params.set('mode', mode);
+    const res = await apiFetch(`/api/tahun-ajar/rollover-preview?${params.toString()}`);
+    if (res.ok && res.data?.success) return res.data;
+    return { success: false, error: res.data?.error || 'Gagal memuat pratinjau kenaikan kelas.' };
+  } catch {
+    return { success: false, error: 'Gagal menghubungi server.' };
+  }
+}
+
+export async function executeAcademicRollover(payload) {
+  try {
+    const res = await apiFetch('/api/tahun-ajar/rollover', { method: 'POST', body: payload });
+    return formatMutationResponse(res, 'Gagal menjalankan proses tutup semester / kenaikan kelas.');
   } catch {
     return { success: false, error: 'Gagal menghubungi server.' };
   }
@@ -434,9 +464,12 @@ export async function deleteDutySchedule(id) {
 export async function getStudents(classFilter, options = {}) {
   try {
     const params = new URLSearchParams();
-    if (classFilter) params.append('kelas', classFilter);
+    if (classFilter && classFilter !== 'Semua') params.append('kelas', classFilter);
     if (options.status) params.append('status', options.status);
     if (options.includeInactive) params.append('includeInactive', 'true');
+    if (options.tahunAjarId) params.append('tahunAjarId', options.tahunAjarId);
+    if (options.grade && options.grade !== 'Semua') params.append('grade', options.grade);
+    if (options.search) params.append('search', options.search);
     const qs = params.toString();
     const url = `/api/siswa${qs ? `?${qs}` : ''}`;
     const res = await apiFetch(url);
@@ -445,6 +478,38 @@ export async function getStudents(classFilter, options = {}) {
     console.error('Failed to get students:', e);
   }
   return [];
+}
+
+export async function getStudentsPaginated({
+  page = 1,
+  limit = 25,
+  kelas,
+  grade,
+  status = 'aktif',
+  search = '',
+  tahunAjarId,
+} = {}) {
+  try {
+    const params = new URLSearchParams();
+    params.set('paginated', 'true');
+    params.set('page', String(page));
+    params.set('limit', String(limit));
+    if (kelas && kelas !== 'Semua') params.set('kelas', kelas);
+    if (grade && grade !== 'Semua') params.set('grade', grade);
+    if (status) params.set('status', status);
+    if (search && search.trim()) params.set('search', search.trim());
+    if (tahunAjarId) params.set('tahunAjarId', tahunAjarId);
+    const res = await apiFetch(`/api/siswa?${params.toString()}`);
+    if (res.ok && res.data?.success) return res.data;
+  } catch (e) {
+    console.error('Failed to get paginated students:', e);
+  }
+  return {
+    success: false,
+    items: [],
+    pagination: { page: 1, limit, total: 0, totalPages: 1, hasNext: false, hasPrev: false },
+    counts: { aktif: 0, lulus: 0, pindah: 0, nonaktif: 0, total: 0 },
+  };
 }
 
 export async function getStudentAttendanceDetail(studentId, month) {
@@ -822,12 +887,13 @@ export async function deleteAcademicCalendarEvent(id) {
 /* ============================================================
    ABSENSI SISWA (Piket Pagi/Sore, Mapel, Monitoring CCTV)
    ============================================================ */
-export async function getAttendance(classFilter, dateFilter, monthFilter) {
+export async function getAttendance(classFilter, dateFilter, monthFilter, options = {}) {
   try {
     const params = new URLSearchParams();
-    if (classFilter) params.set('kelas', classFilter);
+    if (classFilter && classFilter !== 'Semua') params.set('kelas', classFilter);
     if (dateFilter) params.set('date', dateFilter);
-    if (monthFilter) params.set('month', monthFilter);
+    if (monthFilter && monthFilter !== 'all') params.set('month', monthFilter);
+    if (options.tahunAjarId) params.set('tahunAjarId', options.tahunAjarId);
     const qs = params.toString();
     const res = await apiFetch(`/api/absensi${qs ? `?${qs}` : ''}`);
     if (res.ok && Array.isArray(res.data)) return res.data;
@@ -835,6 +901,38 @@ export async function getAttendance(classFilter, dateFilter, monthFilter) {
     console.error('Failed to get attendance:', e);
   }
   return [];
+}
+
+export async function getAttendanceSummary({
+  tahunAjarId,
+  kelas,
+  month = 'all',
+  sesi = 'pagi',
+  search = '',
+  page = 1,
+  limit = 25,
+} = {}) {
+  try {
+    const params = new URLSearchParams();
+    params.set('page', String(page));
+    params.set('limit', String(limit));
+    params.set('sesi', sesi);
+    if (tahunAjarId) params.set('tahunAjarId', tahunAjarId);
+    if (kelas && kelas !== 'Semua') params.set('kelas', kelas);
+    if (month && month !== 'all') params.set('month', month);
+    if (search && search.trim()) params.set('search', search.trim());
+    const res = await apiFetch(`/api/absensi/summary?${params.toString()}`);
+    if (res.ok && res.data?.success) return res.data;
+  } catch (e) {
+    console.error('Failed to get attendance summary:', e);
+  }
+  return {
+    success: false,
+    totals: { hadir: 0, izin: 0, sakit: 0, alpha: 0, bolos: 0, totalRecords: 0, attendanceRate: 0 },
+    monthlyTrend: [],
+    items: [],
+    pagination: { page: 1, limit, total: 0, totalPages: 1, hasNext: false, hasPrev: false },
+  };
 }
 
 export async function saveAttendance(records, options = {}) {
@@ -876,13 +974,14 @@ export async function getHomeroomMonitoring(kelas, month) {
   }
 }
 
-export async function getSubjectAttendance(classFilter, dateFilter, subjectFilter, monthFilter) {
+export async function getSubjectAttendance(classFilter, dateFilter, subjectFilter, monthFilter, options = {}) {
   try {
     const params = new URLSearchParams();
-    if (classFilter) params.set('kelas', classFilter);
+    if (classFilter && classFilter !== 'Semua') params.set('kelas', classFilter);
     if (dateFilter) params.set('date', dateFilter);
-    if (subjectFilter) params.set('mapel', subjectFilter);
-    if (monthFilter) params.set('month', monthFilter);
+    if (subjectFilter && subjectFilter !== 'Semua') params.set('mapel', subjectFilter);
+    if (monthFilter && monthFilter !== 'all') params.set('month', monthFilter);
+    if (options.tahunAjarId) params.set('tahunAjarId', options.tahunAjarId);
     const qs = params.toString();
     const res = await apiFetch(`/api/absensi-mapel${qs ? `?${qs}` : ''}`);
     if (res.ok && Array.isArray(res.data)) return res.data;
@@ -901,16 +1000,38 @@ export async function saveSubjectAttendance(records) {
   }
 }
 
-export async function getSubjectAttendanceRekap(kelas, month, mapelId) {
+export async function getSubjectAttendanceRekap(kelasOrParams, month, mapelId) {
   try {
-    const params = new URLSearchParams({ kelas, month });
-    if (mapelId) params.set('mapel', mapelId);
+    const params = new URLSearchParams();
+    if (kelasOrParams && typeof kelasOrParams === 'object') {
+      const { kelas, month: m, mapel, tahunAjarId, search, page, limit } = kelasOrParams;
+      if (kelas && kelas !== 'Semua') params.set('kelas', kelas);
+      if (m && m !== 'all') params.set('month', m);
+      if (mapel && mapel !== 'Semua' && mapel !== 'semua') params.set('mapel', mapel);
+      if (tahunAjarId) params.set('tahunAjarId', tahunAjarId);
+      if (search && search.trim()) params.set('search', search.trim());
+      if (page) {
+        params.set('paginated', 'true');
+        params.set('page', String(page));
+      }
+      if (limit) params.set('limit', String(limit));
+    } else {
+      if (kelasOrParams) params.set('kelas', kelasOrParams);
+      if (month) params.set('month', month);
+      if (mapelId) params.set('mapel', mapelId);
+    }
     const res = await apiFetch(`/api/absensi-mapel/rekap?${params.toString()}`);
     if (res.ok && res.data) return res.data;
   } catch (e) {
     console.error('Failed to get subject attendance rekap:', e);
   }
-  return { success: false, error: 'Gagal menghubungi server.' };
+  return {
+    success: false,
+    error: 'Gagal menghubungi server.',
+    rekap: [],
+    totals: { hadir: 0, izin: 0, sakit: 0, alpha: 0, totalRecords: 0, attendanceRate: 0 },
+    pagination: { page: 1, limit: 25, total: 0, totalPages: 1, hasNext: false, hasPrev: false },
+  };
 }
 
 export async function getMonitoringClasses({ day, jamKe, date } = {}) {
@@ -928,10 +1049,32 @@ export async function getMonitoringClasses({ day, jamKe, date } = {}) {
   return { date: date || getJakartaToday(), day: day || 'Senin', jamKe: Number(jamKe) || 1, items: [] };
 }
 
-export async function getPrayerAttendance(classFilter) {
-  let data = [...MOCK_PRAYER_ATTENDANCE];
-  if (classFilter) data = data.filter(a => a.class === classFilter);
-  return data;
+export async function getPrayerAttendance(classFilter, dateStr) {
+  try {
+    const params = new URLSearchParams();
+    if (classFilter && classFilter !== 'all') params.set('kelas', classFilter);
+    if (dateStr) params.set('date', dateStr);
+    const qs = params.toString();
+    const res = await apiFetch(`/api/absen-sholat${qs ? `?${qs}` : ''}`);
+    if (res.ok && res.data?.success) {
+      return res.data;
+    }
+  } catch (e) {
+    console.error('Failed to get prayer attendance:', e);
+  }
+  return { success: false, date: dateStr || getJakartaToday(), data: [], summary: { totalStudents: 0, dzuhurCount: 0, asharCount: 0, lengkapCount: 0 } };
+}
+
+export async function savePrayerAttendance(date, records) {
+  try {
+    const res = await apiFetch('/api/absen-sholat', {
+      method: 'POST',
+      body: { date, records },
+    });
+    return formatMutationResponse(res, 'Gagal menyimpan absensi sholat.');
+  } catch {
+    return { success: false, error: 'Gagal menghubungi server.' };
+  }
 }
 
 /* ============================================================
@@ -1011,13 +1154,59 @@ export async function getStudentBehaviorSummary(siswaId) {
 }
 
 /* ============================================================
-   PAYMENTS (Legacy)
+   PEMBAYARAN SPP & KEUANGAN SISWA (API-BACKED)
    ============================================================ */
-export async function getPayments(studentIdFilter) {
-  if (studentIdFilter) {
-    return MOCK_PAYMENTS.filter(p => p.studentId === studentIdFilter);
+export async function getPayments(filtersOrStudentId = {}) {
+  try {
+    const params = new URLSearchParams();
+    if (typeof filtersOrStudentId === 'string') {
+      params.set('studentId', filtersOrStudentId);
+    } else if (filtersOrStudentId && typeof filtersOrStudentId === 'object') {
+      if (filtersOrStudentId.studentId) params.set('studentId', filtersOrStudentId.studentId);
+      if (filtersOrStudentId.status && filtersOrStudentId.status !== 'all') params.set('status', filtersOrStudentId.status);
+      if (filtersOrStudentId.kelas && filtersOrStudentId.kelas !== 'all') params.set('kelas', filtersOrStudentId.kelas);
+      if (filtersOrStudentId.search) params.set('search', filtersOrStudentId.search);
+      if (filtersOrStudentId.page) params.set('page', String(filtersOrStudentId.page));
+      if (filtersOrStudentId.limit) params.set('limit', String(filtersOrStudentId.limit));
+    }
+    const qs = params.toString();
+    const res = await apiFetch(`/api/pembayaran${qs ? `?${qs}` : ''}`);
+    if (res.ok && res.data?.success) {
+      return typeof filtersOrStudentId === 'string' ? res.data.data || [] : res.data;
+    }
+  } catch (e) {
+    console.error('Failed to get payments:', e);
   }
-  return [...MOCK_PAYMENTS];
+  return typeof filtersOrStudentId === 'string'
+    ? []
+    : { success: false, data: [], summary: { totalTagihan: 0, totalTerbayar: 0, totalTunggakan: 0, countLunas: 0, countCicilan: 0, countBelum: 0 } };
+}
+
+export async function createPayment(data) {
+  try {
+    const res = await apiFetch('/api/pembayaran', { method: 'POST', body: data });
+    return formatMutationResponse(res, 'Gagal menambahkan tagihan pembayaran.');
+  } catch {
+    return { success: false, error: 'Gagal menghubungi server.' };
+  }
+}
+
+export async function updatePayment(id, data) {
+  try {
+    const res = await apiFetch(`/api/pembayaran/${encodeURIComponent(id)}`, { method: 'PUT', body: data });
+    return formatMutationResponse(res, 'Gagal memperbarui pembayaran.');
+  } catch {
+    return { success: false, error: 'Gagal menghubungi server.' };
+  }
+}
+
+export async function deletePayment(id) {
+  try {
+    const res = await apiFetch(`/api/pembayaran/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    return formatMutationResponse(res, 'Gagal menghapus data pembayaran.');
+  } catch {
+    return { success: false, error: 'Gagal menghubungi server.' };
+  }
 }
 
 /* ============================================================
@@ -1273,3 +1462,118 @@ export async function deletePPDB(id) {
     return { success: false, error: 'Gagal menghubungi server.' };
   }
 }
+
+/* ============================================================
+   AUDIT TRAIL, PENGATURAN SEKOLAH, NOTIFIKASI & BACKUP
+   ============================================================ */
+export async function getAuditLogs({ action = 'all', search = '', page = 1, limit = 25 } = {}) {
+  try {
+    const params = new URLSearchParams();
+    if (action && action !== 'all') params.set('action', action);
+    if (search) params.set('search', search);
+    params.set('page', String(page));
+    params.set('limit', String(limit));
+    const res = await apiFetch(`/api/audit-logs?${params.toString()}`);
+    if (res.ok && res.data?.success) return res.data;
+  } catch (e) {
+    console.error('Failed to get audit logs:', e);
+  }
+  return { success: false, data: [], actions: [], pagination: { page: 1, limit, total: 0, totalPages: 1 } };
+}
+
+export async function getSchoolConfig() {
+  try {
+    const res = await apiFetch('/api/school-config');
+    if (res.ok && res.data?.success) return res.data.data;
+  } catch (e) {
+    console.error('Failed to get school config:', e);
+  }
+  return null;
+}
+
+export async function updateSchoolConfig(payload) {
+  try {
+    const res = await apiFetch('/api/school-config', { method: 'PUT', body: payload });
+    return formatMutationResponse(res, 'Gagal menyimpan konfigurasi sekolah.');
+  } catch {
+    return { success: false, error: 'Gagal menghubungi server.' };
+  }
+}
+
+export async function getNotifications({ page = 1, limit = 20, unreadOnly = false, eventType = 'all' } = {}) {
+  try {
+    const params = new URLSearchParams();
+    params.set('page', String(page));
+    params.set('limit', String(limit));
+    if (unreadOnly) params.set('unreadOnly', 'true');
+    if (eventType && eventType !== 'all') params.set('eventType', eventType);
+    const res = await apiFetch(`/api/notifications?${params.toString()}`);
+    if (res.ok && res.data?.success) return res.data;
+  } catch (e) {
+    console.error('Failed to get notifications:', e);
+  }
+  return { success: false, data: [], unreadCount: 0, pagination: { page: 1, limit, total: 0, totalPages: 1 } };
+}
+
+export async function markNotificationRead(id) {
+  try {
+    const res = await apiFetch(`/api/notifications/${encodeURIComponent(id)}/read`, { method: 'PUT' });
+    return formatMutationResponse(res, 'Gagal menandai notifikasi dibaca.');
+  } catch {
+    return { success: false, error: 'Gagal menghubungi server.' };
+  }
+}
+
+export async function markAllNotificationsRead() {
+  try {
+    const res = await apiFetch('/api/notifications/read-all', { method: 'PUT' });
+    return formatMutationResponse(res, 'Gagal menandai semua notifikasi.');
+  } catch {
+    return { success: false, error: 'Gagal menghubungi server.' };
+  }
+}
+
+export async function testNotificationWebhook(payload = {}) {
+  try {
+    const res = await apiFetch('/api/notifications/test-webhook', { method: 'POST', body: payload });
+    return formatMutationResponse(res, 'Gagal mengirim tes notifikasi.');
+  } catch {
+    return { success: false, error: 'Gagal menghubungi server.' };
+  }
+}
+
+export async function triggerDailyBackup() {
+  try {
+    const res = await apiFetch('/api/system/backup-trigger', { method: 'POST' });
+    return formatMutationResponse(res, 'Gagal menjalankan verifikasi backup harian.');
+  } catch {
+    return { success: false, error: 'Gagal menghubungi server.' };
+  }
+}
+
+export async function downloadSystemBackup() {
+  try {
+    const res = await fetch('/api/system/backup-export', {
+      credentials: 'include',
+      headers: getAuthHeaders({ 'X-Requested-With': 'XMLHttpRequest' }),
+    });
+    if (!res.ok) {
+      const errData = await res.json().catch(() => null);
+      return { success: false, error: errData?.error || 'Gagal mengunduh backup database.' };
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const dateTag = getJakartaToday();
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `sia-mu4ra-backup-${dateTag}.json`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    return { success: true, message: `Backup snapshot (sia-mu4ra-backup-${dateTag}.json) berhasil diunduh.` };
+  } catch {
+    return { success: false, error: 'Gagal menghubungi server backup.' };
+  }
+}
+

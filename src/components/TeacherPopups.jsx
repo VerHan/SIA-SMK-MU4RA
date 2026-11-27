@@ -1,139 +1,144 @@
 import { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
-import { getMasterTimeSlots, getSchedule } from '../services/api';
+import {
+  getJakartaToday,
+  getMasterTimeSlots,
+  getSchedule,
+  getTeacherAttendance,
+} from '../services/api';
 import Modal from './ui/Modal';
 import Button from './ui/Button';
-import Toast from './ui/Toast';
 
 export default function TeacherPopups() {
   const { user } = useAuth();
-  
-  // States
+  const navigate = useNavigate();
+
   const [showGPSModal, setShowGPSModal] = useState(false);
   const [showClassModal, setShowClassModal] = useState(false);
   const [currentClass, setCurrentClass] = useState(null);
-  const [toast, setToast] = useState(null);
 
-  // MOCK LOGIC: We only run these checks if the user is a teacher
   useEffect(() => {
-    if (user?.role !== 'guru') return;
+    if (user?.role !== 'guru') return undefined;
 
-    // 1. Check GPS Attendance (has the teacher checked in today?)
-    // In a real app, we check the backend or localStorage
-    const hasCheckedIn = localStorage.getItem(`gps_checkin_${new Date().toLocaleDateString()}`);
-    if (!hasCheckedIn) {
-      // Small delay before showing popup for better UX
-      setTimeout(() => setShowGPSModal(true), 1500);
-    }
+    let cancelled = false;
+    const today = getJakartaToday();
+    const dismissedKey = `sia_gps_reminder_dismissed_${user.id}_${today}`;
 
-    // 2. Check if a class is starting right now based on Master Timeline
+    // 1. Check real server teacher attendance status for today
+    const checkTeacherAttendance = async () => {
+      if (sessionStorage.getItem(dismissedKey)) return;
+      try {
+        const records = await getTeacherAttendance({
+          date: today,
+          teacherId: user.teacherId || undefined,
+          teacherName: !user.teacherId ? user.name : undefined,
+        });
+        const hasCheckedInToday = Array.isArray(records) && records.length > 0;
+        if (!cancelled && !hasCheckedInToday) {
+          setShowGPSModal(true);
+        }
+      } catch {
+        /* Abaikan error jaringan agar tidak mengganggu guru */
+      }
+    };
+
+    // 2. Check active class schedule from real API
     const checkCurrentClass = async () => {
-      const timeSlots = await getMasterTimeSlots();
-      const today = getCurrentDay();
-      const schedules = await getSchedule(today);
-      
-      // Get current hour:minute
-      const now = new Date();
-      const currentTimeStr = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
-      
-      // Find current active time slot (Mock logic: for testing, let's just assume we found one if we are testing)
-      // Since we want this to work regardless of actual real-world time during testing,
-      // I'll add a mock trigger if time is within a slot, or just trigger it for demo purposes if localStorage is set.
-      
-      const activeSlot = timeSlots.find(slot => {
-        if (!slot.jamKe) return false; // skip breaks
-        return currentTimeStr >= slot.start && currentTimeStr <= slot.end;
-      });
+      try {
+        const [timeSlots, schedules] = await Promise.all([
+          getMasterTimeSlots(),
+          getSchedule(getCurrentDay()),
+        ]);
+        if (cancelled) return;
 
-      // Find teacher's schedule for this active slot
-      if (activeSlot) {
-        // Find if this teacher (mock matching by name or just taking the first one for demo)
-        // In real app: s.teacherId === user.teacherId
-        const myClass = schedules.find(s => s.jamKe === activeSlot.jamKe && s.teacher === user.name);
-        
+        const now = new Date();
+        const currentTimeStr = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+        const activeSlot = (timeSlots || []).find(
+          (slot) => slot.jamKe && currentTimeStr >= slot.start && currentTimeStr <= slot.end
+        );
+        if (!activeSlot) return;
+
+        const myClass = (schedules || []).find(
+          (s) =>
+            s.jamKe === activeSlot.jamKe &&
+            ((user.teacherId && s.teacherId === user.teacherId) || s.teacher === user.name)
+        );
         if (myClass) {
-          const hasConfirmedClass = localStorage.getItem(`class_confirm_${myClass.id}_${new Date().toLocaleDateString()}`);
-          if (!hasConfirmedClass) {
+          const confirmKey = `sia_class_reminder_${myClass.id}_${today}`;
+          if (!sessionStorage.getItem(confirmKey)) {
             setCurrentClass({
               ...myClass,
               slotStart: activeSlot.start,
-              slotEnd: activeSlot.end
+              slotEnd: activeSlot.end,
             });
             setShowClassModal(true);
           }
         }
+      } catch {
+        /* Abaikan error jaringan */
       }
     };
 
+    const gpsTimer = setTimeout(checkTeacherAttendance, 1200);
     checkCurrentClass();
-    
-    // Set up an interval to check every minute
     const interval = setInterval(checkCurrentClass, 60000);
-    return () => clearInterval(interval);
 
+    return () => {
+      cancelled = true;
+      clearTimeout(gpsTimer);
+      clearInterval(interval);
+    };
   }, [user]);
 
-  const handleConfirmGPS = () => {
-    localStorage.setItem(`gps_checkin_${new Date().toLocaleDateString()}`, 'true');
+  const dismissGPS = () => {
+    const today = getJakartaToday();
+    if (user?.id) sessionStorage.setItem(`sia_gps_reminder_dismissed_${user.id}_${today}`, '1');
     setShowGPSModal(false);
-    setToast({ type: 'success', message: 'Terima kasih, Anda telah mengkonfirmasi kedatangan.' });
   };
 
-  const handleConfirmClass = () => {
-    if (currentClass) {
-      localStorage.setItem(`class_confirm_${currentClass.id}_${new Date().toLocaleDateString()}`, 'true');
-      
-      // Mock API call to update the Admin CCTV (Monitoring Mapel)
-      // We will store this in localStorage so MonitoringMapelPage can read it
-      const cctvState = JSON.parse(localStorage.getItem('cctv_state') || '{}');
-      cctvState[currentClass.id] = 'guru_hadir'; // Status: Guru Hadir, Belum Absen
-      localStorage.setItem('cctv_state', JSON.stringify(cctvState));
+  const goToGPS = () => {
+    dismissGPS();
+    navigate('/client/absen-gps');
+  };
 
-      setShowClassModal(false);
-      setToast({ type: 'success', message: `Kehadiran di kelas ${currentClass.class} telah dicatat. Jangan lupa input absen siswa nanti.` });
+  const goToMapelAttendance = () => {
+    if (currentClass) {
+      sessionStorage.setItem(`sia_class_reminder_${currentClass.id}_${getJakartaToday()}`, '1');
     }
+    setShowClassModal(false);
+    navigate('/client/absen-mapel');
   };
 
   if (user?.role !== 'guru') return null;
 
   return (
     <>
-      {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
-      
-      {/* 1. Modal GPS Reminder */}
-      <Modal isOpen={showGPSModal} onClose={() => setShowGPSModal(false)} title="Peringatan Kedatangan">
+      <Modal isOpen={showGPSModal} onClose={dismissGPS} title="Pengingat Presensi Guru (GPS)">
         <div style={{ textAlign: 'center', padding: 'var(--space-4) 0' }}>
-          <div style={{ fontSize: '40px', marginBottom: 'var(--space-2)' }}>📍</div>
-          <p style={{ marginBottom: 'var(--space-4)', fontSize: '15px' }}>
-            Anda belum melakukan **Absen Geolokasi (GPS)** hari ini. 
-            Mohon segera melakukan absen di menu "Absen Guru (GPS)" untuk merekam jam kedatangan Anda.
+          <p style={{ marginBottom: 'var(--space-5)', fontSize: '14px', lineHeight: 1.6, color: 'var(--color-text-secondary)' }}>
+            Anda belum tercatat melakukan <strong>Absen Geolokasi (GPS)</strong> hari ini. Silakan buka halaman Absen GPS untuk mencatat jam kedatangan secara akurat.
           </p>
           <div style={{ display: 'flex', gap: 'var(--space-3)', justifyContent: 'center' }}>
-            <Button variant="outline" onClick={() => setShowGPSModal(false)}>Nanti Saja</Button>
-            <Button onClick={handleConfirmGPS}>Tandai Hadir Sekarang (Mock)</Button>
+            <Button variant="outline" onClick={dismissGPS}>Nanti Saja</Button>
+            <Button onClick={goToGPS}>Buka Absen GPS</Button>
           </div>
         </div>
       </Modal>
 
-      {/* 2. Modal Class "I'm Here" Reminder */}
-      <Modal isOpen={showClassModal} onClose={() => setShowClassModal(false)} title="Konfirmasi Kelas (I'm Here!)">
+      <Modal isOpen={showClassModal} onClose={() => setShowClassModal(false)} title="Pengingat Jadwal Mengajar">
         <div style={{ textAlign: 'center', padding: 'var(--space-4) 0' }}>
-          <div style={{ fontSize: '40px', marginBottom: 'var(--space-2)' }}>🔔</div>
-          <h3 style={{ fontSize: '18px', fontWeight: 'bold', color: 'var(--color-primary)', marginBottom: 'var(--space-2)' }}>
-            Jam Pelajaran Ke-{currentClass?.jamKe} Dimulai!
+          <h3 style={{ fontSize: '18px', fontWeight: 700, color: 'var(--color-primary)', marginBottom: 'var(--space-2)' }}>
+            Jam Pelajaran Ke-{currentClass?.jamKe} Sedang Berlangsung
           </h3>
-          <p style={{ marginBottom: 'var(--space-4)', fontSize: '15px', background: 'var(--color-surface)', padding: 'var(--space-3)', borderRadius: 'var(--radius-md)' }}>
-            Jadwal Anda saat ini: <br/>
-            <strong>Mata Pelajaran:</strong> {currentClass?.subject} <br/>
-            <strong>Kelas:</strong> {currentClass?.class} <br/>
+          <p style={{ marginBottom: 'var(--space-4)', fontSize: '14px', background: 'var(--color-bg)', padding: 'var(--space-3)', borderRadius: 'var(--radius-md)', lineHeight: 1.6 }}>
+            <strong>Mata Pelajaran:</strong> {currentClass?.subject} <br />
+            <strong>Kelas:</strong> {currentClass?.class} <br />
             <strong>Waktu:</strong> {currentClass?.slotStart} - {currentClass?.slotEnd}
-          </p>
-          <p style={{ marginBottom: 'var(--space-5)', fontSize: '13px', color: 'var(--color-danger)' }}>
-            *Harap konfirmasi bahwa Anda sudah berada di dalam kelas agar Kepala Sekolah mengetahui status kelas tidak kosong.
           </p>
           <div style={{ display: 'flex', gap: 'var(--space-3)', justifyContent: 'center' }}>
             <Button variant="outline" onClick={() => setShowClassModal(false)}>Tutup</Button>
-            <Button onClick={handleConfirmClass}>Ya, Saya Sudah di Kelas</Button>
+            <Button onClick={goToMapelAttendance}>Buka Absen Mapel</Button>
           </div>
         </div>
       </Modal>

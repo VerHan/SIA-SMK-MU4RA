@@ -10,6 +10,7 @@
    ============================================================ */
 
 import { useState, useEffect, useMemo } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import Card from '../../components/ui/Card';
 import Button from '../../components/ui/Button';
 import Input from '../../components/ui/Input';
@@ -17,6 +18,7 @@ import Modal from '../../components/ui/Modal';
 import Badge from '../../components/ui/Badge';
 import Toast from '../../components/ui/Toast';
 import LoadingSpinner from '../../components/ui/LoadingSpinner';
+import RolloverModal from '../../components/dashboard/RolloverModal';
 import {
   getAcademicYears,
   addAcademicYear,
@@ -94,9 +96,11 @@ function calculatePeriodMetrics(startDateStr, endDateStr) {
 }
 
 export default function TahunAjarPage() {
+  const queryClient = useQueryClient();
   const [years, setYears] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
+  const [showRolloverModal, setShowRolloverModal] = useState(false);
   const [editData, setEditData] = useState(null);
   const [toast, setToast] = useState(null);
   const [submitting, setSubmitting] = useState(false);
@@ -323,9 +327,18 @@ export default function TahunAjarPage() {
             Atur periode aktif kalender belajar mengajar, pembagian semester, dan arsip tahun akademik.
           </p>
         </div>
-        <Button onClick={handleOpenAddModal}>
-          Tambah Tahun Ajar
-        </Button>
+        <div style={{ display: 'flex', gap: 'var(--space-2)', flexWrap: 'wrap' }}>
+          <Button
+            variant="outline"
+            onClick={() => setShowRolloverModal(true)}
+            disabled={years.length === 0}
+          >
+            Tutup Semester &amp; Naik Kelas Massal
+          </Button>
+          <Button onClick={handleOpenAddModal}>
+            + Tambah Tahun Ajar
+          </Button>
+        </div>
       </div>
 
       {loading ? (
@@ -825,6 +838,22 @@ export default function TahunAjarPage() {
           </form>
         </Modal>
       )}
+
+      <RolloverModal
+        isOpen={showRolloverModal}
+        onClose={() => setShowRolloverModal(false)}
+        years={years}
+        activeYear={activeYear}
+        onSuccess={({ completed, message }) => {
+          fetchData();
+          if (completed) {
+            queryClient.invalidateQueries({ queryKey: ['students'] });
+            queryClient.invalidateQueries({ queryKey: ['classes'] });
+            queryClient.invalidateQueries({ queryKey: ['dashboard-stats'] });
+            setToast({ type: 'success', message: message || 'Kenaikan kelas massal berhasil dijalankan!' });
+          }
+        }}
+      />
     </div>
   );
 }

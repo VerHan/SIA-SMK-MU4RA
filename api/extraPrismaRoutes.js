@@ -1,4 +1,5 @@
 import express from 'express';
+import { realtimeHub } from './modules/realtimeHub.js';
 import {
   buildUserCapabilities,
   clearSessionCookie,
@@ -17,13 +18,28 @@ import {
   validateNewPassword,
   verifyPasswordAsync,
 } from './authUtils.js';
+import {
+  buildMonthDateBounds,
+  buildPaginationMeta,
+  getAcademicYearDateRange,
+  parsePaginationParams,
+} from './academicRolloverUtils.js';
+import {
+  changePasswordSchema,
+  userCreateSchema,
+  userUpdateSchema,
+  validateBody,
+} from './validators/schemas.js';
 import { MOCK_TIME_SLOTS, MOCK_NEWS } from '../src/services/mockData.js';
 
 const VALID_PPDB_STATUSES = new Set(['Menunggu Verifikasi', 'Diterima', 'Cadangan', 'Ditolak']);
 const VALID_NON_EMPTY_ATTENDANCE = new Set(['hadir', 'izin', 'sakit', 'alpha']);
 const VALID_ATTENDANCE_STATUSES = new Set(['hadir', 'izin', 'sakit', 'alpha', null, '', undefined]);
 
-export function createExtraPrismaRoutes(prisma, { getActiveTahunAjar } = {}) {
+export function createExtraPrismaRoutes(
+  prisma,
+  { getActiveTahunAjar, logAudit = async () => {}, invalidateUserSession = () => {}, dispatchAttendanceNotifications = async () => [] } = {}
+) {
   const router = express.Router();
   const resolveActiveTahunAjar = getActiveTahunAjar
     || (() => prisma.tahunAjar.findFirst({ where: { isActive: true } }));
@@ -38,7 +54,7 @@ export function createExtraPrismaRoutes(prisma, { getActiveTahunAjar } = {}) {
     }
     try {
       const user = await prisma.user.findUnique({ where: { id: req.authUser.id } });
-      if (!user) {
+      if (!user || user.isActive === false) {
         clearSessionCookie(req, res);
         return res.status(200).json({ success: false, authenticated: false, user: null });
       }
@@ -57,6 +73,8 @@ export function createExtraPrismaRoutes(prisma, { getActiveTahunAjar } = {}) {
         name: user.name,
         role: normalizedRole,
         isPiket,
+        isActive: user.isActive !== false,
+        tokenVersion: Number(user.tokenVersion) || 1,
         teacherId: user.teacherId || null,
         studentId: user.studentId || null,
         homeroomClasses,
@@ -83,13 +101,10 @@ export function createExtraPrismaRoutes(prisma, { getActiveTahunAjar } = {}) {
     res.json({ success: true, message: 'Berhasil keluar dari sesi.' });
   });
 
-  // Self-service password change for any authenticated user (verifies old password & refreshes session)
-  router.post('/auth/change-password', requireAuth, async (req, res) => {
+  // Self-service password change for any authenticated user (increments tokenVersion to revoke other devices)
+  router.post('/auth/change-password', requireAuth, validateBody(changePasswordSchema), async (req, res) => {
     try {
-      const { currentPassword, newPassword } = req.body || {};
-      if (!currentPassword || !newPassword) {
-        return res.status(400).json({ success: false, error: 'Password lama dan password baru wajib diisi.' });
-      }
+      const { currentPassword, newPassword } = req.validatedBody;
       const user = await prisma.user.findUnique({ where: { id: req.authUser.id } });
       if (!user) {
         return res.status(404).json({ success: false, error: 'Akun tidak ditemukan.' });
@@ -104,17 +119,24 @@ export function createExtraPrismaRoutes(prisma, { getActiveTahunAjar } = {}) {
       }
 
       const hashed = await hashPasswordAsync(check.value);
+      const nextTv = (Number(user.tokenVersion) || 1) + 1;
       await prisma.user.update({
         where: { id: user.id },
-        data: { password: hashed },
+        data: { password: hashed, tokenVersion: nextTv },
+      });
+      invalidateUserSession(user.id);
+      await logAudit(req, {
+        action: 'AUTH_CHANGE_PASSWORD',
+        target: `${user.name} (@${user.username})`,
+        detail: { newTokenVersion: nextTv, otherDevicesRevoked: true },
       });
 
-      const token = signToken(req.authUser, { rememberMe: true });
+      const token = signToken({ ...req.authUser, tokenVersion: nextTv }, { rememberMe: true });
       setSessionCookie(req, res, token, { rememberMe: true });
       res.json({
         success: true,
         token,
-        message: 'Password berhasil diperbarui! Sesi login Anda tetap aktif.',
+        message: 'Password berhasil diperbarui! Sesi di perangkat lain otomatis terputus.',
       });
     } catch (err) {
       res.status(500).json({ success: false, error: err.message });
@@ -139,6 +161,8 @@ export function createExtraPrismaRoutes(prisma, { getActiveTahunAjar } = {}) {
           name: u.name,
           role: u.role,
           isPiket,
+          isActive: u.isActive !== false,
+          tokenVersion: Number(u.tokenVersion) || 1,
           teacherId: u.teacherId || null,
           teacherName: u.guru?.name || null,
           homeroomClasses,
@@ -153,17 +177,11 @@ export function createExtraPrismaRoutes(prisma, { getActiveTahunAjar } = {}) {
     }
   });
 
-  router.post('/users', requireRole('admin'), async (req, res) => {
+  router.post('/users', requireRole('admin'), validateBody(userCreateSchema), async (req, res) => {
     try {
-      const { username, password, name, role, isPiket, teacherId, studentId } = req.body || {};
-      const cleanUsername = String(username || '').trim();
-      const cleanName = String(name || '').trim();
-      if (!cleanUsername || !cleanName || !password || String(password).length < 6) {
-        return res.status(400).json({ success: false, error: 'Username, nama, dan password (min. 6 karakter) wajib diisi.' });
-      }
-      if (!isValidRole(role)) {
-        return res.status(400).json({ success: false, error: 'Role tidak valid.' });
-      }
+      const { username, password, name, role, isPiket, isActive, teacherId, studentId } = req.validatedBody;
+      const cleanUsername = String(username).trim();
+      const cleanName = String(name).trim();
       const existing = await prisma.user.findUnique({ where: { username: cleanUsername } });
       if (existing) {
         return res.status(400).json({ success: false, error: `Username "${cleanUsername}" sudah digunakan.` });
@@ -188,9 +206,17 @@ export function createExtraPrismaRoutes(prisma, { getActiveTahunAjar } = {}) {
           name: cleanName,
           role,
           isPiket: role === 'guru' ? Boolean(isPiket) : false,
+          isActive: isActive !== false,
+          tokenVersion: 1,
           teacherId: cleanTeacherId,
           studentId: cleanStudentId,
         },
+      });
+
+      await logAudit(req, {
+        action: 'USER_CREATE',
+        target: `${created.name} (@${created.username})`,
+        detail: { role: created.role, isPiket: created.isPiket },
       });
 
       res.json({
@@ -201,6 +227,8 @@ export function createExtraPrismaRoutes(prisma, { getActiveTahunAjar } = {}) {
           name: created.name,
           role: created.role,
           isPiket: Boolean(created.isPiket),
+          isActive: created.isActive !== false,
+          tokenVersion: Number(created.tokenVersion) || 1,
           teacherId: created.teacherId,
           studentId: created.studentId,
         },
@@ -211,24 +239,30 @@ export function createExtraPrismaRoutes(prisma, { getActiveTahunAjar } = {}) {
     }
   });
 
-  router.put('/users/:id', requireRole('admin'), async (req, res) => {
+  router.put('/users/:id', requireRole('admin'), validateBody(userUpdateSchema), async (req, res) => {
     try {
       const { id } = req.params;
-      const { name, role, isPiket, password, teacherId, studentId } = req.body || {};
+      const { name, role, isPiket, isActive, password, teacherId, studentId } = req.validatedBody;
       const existing = await prisma.user.findUnique({ where: { id } });
       if (!existing) return res.status(404).json({ success: false, error: 'Akun tidak ditemukan.' });
+      if (id === req.authUser.id && isActive === false) {
+        return res.status(400).json({ success: false, error: 'Anda tidak dapat menonaktifkan akun Anda sendiri.' });
+      }
 
       const nextRole = role !== undefined ? role : existing.role;
-      if (!isValidRole(nextRole)) return res.status(400).json({ success: false, error: 'Role tidak valid.' });
-
+      const nextActive = isActive !== undefined ? Boolean(isActive) : existing.isActive !== false;
       const updateData = {};
       if (name && String(name).trim()) updateData.name = String(name).trim();
       if (role !== undefined) updateData.role = nextRole;
+      if (isActive !== undefined) updateData.isActive = nextActive;
+      let passwordReset = false;
       if (password && String(password).trim()) {
-        if (String(password).length < 6) {
-          return res.status(400).json({ success: false, error: 'Password minimal 6 karakter.' });
-        }
         updateData.password = await hashPasswordAsync(password);
+        passwordReset = true;
+      }
+      const shouldRevoke = passwordReset || nextRole !== existing.role || nextActive === false;
+      if (shouldRevoke) {
+        updateData.tokenVersion = (Number(existing.tokenVersion) || 1) + 1;
       }
       if (isPiket !== undefined || role !== undefined) {
         updateData.isPiket = nextRole === 'guru' ? Boolean(isPiket !== undefined ? isPiket : existing.isPiket) : false;
@@ -255,6 +289,15 @@ export function createExtraPrismaRoutes(prisma, { getActiveTahunAjar } = {}) {
       }
 
       const updated = await prisma.user.update({ where: { id }, data: updateData });
+      if (shouldRevoke) {
+        invalidateUserSession(id);
+      }
+      await logAudit(req, {
+        action: passwordReset ? 'USER_PASSWORD_RESET' : nextActive === false ? 'USER_DEACTIVATE' : 'USER_UPDATE',
+        target: `${updated.name} (@${updated.username})`,
+        detail: { passwordReset, isActive: nextActive, sessionsRevoked: shouldRevoke },
+      });
+
       res.json({
         success: true,
         data: {
@@ -263,10 +306,14 @@ export function createExtraPrismaRoutes(prisma, { getActiveTahunAjar } = {}) {
           name: updated.name,
           role: updated.role,
           isPiket: Boolean(updated.isPiket),
+          isActive: updated.isActive !== false,
+          tokenVersion: Number(updated.tokenVersion) || 1,
           teacherId: updated.teacherId,
           studentId: updated.studentId,
         },
-        message: 'Akun pengguna berhasil diperbarui.',
+        message: shouldRevoke
+          ? 'Akun diperbarui & sesi perangkat lama otomatis diputus.'
+          : 'Akun pengguna berhasil diperbarui.',
       });
     } catch (err) {
       res.status(500).json({ success: false, error: err.message });
@@ -279,7 +326,16 @@ export function createExtraPrismaRoutes(prisma, { getActiveTahunAjar } = {}) {
       if (id === req.authUser.id) {
         return res.status(400).json({ success: false, error: 'Anda tidak dapat menghapus akun yang sedang aktif digunakan.' });
       }
+      const existing = await prisma.user.findUnique({ where: { id } });
       await prisma.user.delete({ where: { id } });
+      invalidateUserSession(id);
+      if (existing) {
+        await logAudit(req, {
+          action: 'USER_DELETE',
+          target: `${existing.name} (@${existing.username})`,
+          detail: { role: existing.role },
+        });
+      }
       res.json({ success: true, message: 'Akun pengguna berhasil dihapus.' });
     } catch (err) {
       res.status(500).json({ success: false, error: err.message });
@@ -533,67 +589,92 @@ export function createExtraPrismaRoutes(prisma, { getActiveTahunAjar } = {}) {
   // ==========================================
   router.get('/absensi', requireAuth, async (req, res) => {
     try {
-      const { kelas, date, month, studentId } = req.query;
+      const { kelas, date, month, studentId, tahunAjarId } = req.query;
+      const { isPaginated, page, limit, skip } = parsePaginationParams(req.query, { defaultLimit: 50, maxLimit: 200 });
       const where = {};
+      const andClauses = [];
+
+      const useExplicitYear = Boolean(tahunAjarId && tahunAjarId !== 'all');
+      const targetYear = useExplicitYear
+        ? await prisma.tahunAjar.findUnique({ where: { id: String(tahunAjarId) } })
+        : null;
+
       if (req.authUser.role === 'wali_murid') {
         where.studentId = req.authUser.studentId || '__no_linked_student__';
       } else {
-        if (studentId) where.studentId = studentId;
-        if (kelas) {
-          where.student = {
-            riwayatKelas: { some: { kelas: { name: kelas }, tahunAjar: { isActive: true } } },
-          };
+        if (studentId) where.studentId = String(studentId);
+        if (kelas && kelas !== 'Semua') {
+          const riwayatYearScope = useExplicitYear
+            ? { tahunAjarId: String(tahunAjarId) }
+            : { tahunAjar: { isActive: true } };
+          andClauses.push({
+            OR: [
+              { kelas: { name: String(kelas) } },
+              { student: { riwayatKelas: { some: { kelas: { name: String(kelas) }, ...riwayatYearScope } } } },
+            ],
+          });
         }
       }
-      if (date) where.date = new Date(`${date}T00:00:00.000Z`);
-      if (month) {
-        const [y, m] = month.split('-');
-        const start = new Date(`${y}-${m}-01T00:00:00.000Z`);
-        const end = new Date(start);
-        end.setUTCMonth(end.getUTCMonth() + 1);
-        where.date = { gte: start, lt: end };
+
+      if (useExplicitYear) {
+        const range = getAcademicYearDateRange(targetYear);
+        if (range) {
+          andClauses.push({
+            OR: [
+              { tahunAjarId: String(tahunAjarId) },
+              { tahunAjarId: null, date: { gte: range.startDate, lte: range.endDate } },
+            ],
+          });
+        } else {
+          where.tahunAjarId = String(tahunAjarId);
+        }
       }
 
-      const isUnbounded = !date && !month && !studentId;
-      const items = await prisma.absensi.findMany({
-        where,
-        select: {
-          id: true,
-          studentId: true,
-          kelasId: true,
-          date: true,
-          statusPagi: true,
-          statusSore: true,
-          recordedByUserId: true,
-          recordedByGuruId: true,
-          updatedAt: true,
-          kelas: { select: { id: true, name: true } },
-          recordedByUser: { select: { id: true, name: true } },
-          recordedByGuru: { select: { id: true, name: true } },
-          student: {
-            select: {
-              name: true,
-              riwayatKelas: {
-                select: {
-                  kelasId: true,
-                  kelas: { select: { name: true } },
-                },
-                where: { tahunAjar: { isActive: true } },
-                take: 1,
+      if (date) {
+        where.date = new Date(`${String(date).split('T')[0]}T00:00:00.000Z`);
+      } else if (month && month !== 'all') {
+        const bounds = buildMonthDateBounds(month);
+        if (bounds) where.date = { gte: bounds.start, lt: bounds.end };
+      }
+
+      if (andClauses.length > 0) where.AND = andClauses;
+
+      const selectFields = {
+        id: true,
+        studentId: true,
+        kelasId: true,
+        tahunAjarId: true,
+        date: true,
+        statusPagi: true,
+        statusSore: true,
+        recordedByUserId: true,
+        recordedByGuruId: true,
+        updatedAt: true,
+        kelas: { select: { id: true, name: true } },
+        recordedByUser: { select: { id: true, name: true } },
+        recordedByGuru: { select: { id: true, name: true } },
+        student: {
+          select: {
+            name: true,
+            riwayatKelas: {
+              select: {
+                kelasId: true,
+                kelas: { select: { name: true } },
               },
+              where: useExplicitYear ? { tahunAjarId: String(tahunAjarId) } : { tahunAjar: { isActive: true } },
+              take: 1,
             },
           },
         },
-        orderBy: { date: 'desc' },
-        ...(isUnbounded ? { take: 2500 } : {}),
-      });
+      };
 
-      res.json(items.map(a => ({
+      const formatRow = (a) => ({
         id: a.id,
         studentId: a.studentId,
         studentName: a.student?.name || '-',
         kelasId: a.kelasId || a.student?.riwayatKelas?.[0]?.kelasId || null,
         class: a.kelas?.name || a.student?.riwayatKelas?.[0]?.kelas?.name || kelas || '-',
+        tahunAjarId: a.tahunAjarId || null,
         date: a.date.toISOString().split('T')[0],
         statusPagi: a.statusPagi,
         statusSore: a.statusSore,
@@ -601,9 +682,221 @@ export function createExtraPrismaRoutes(prisma, { getActiveTahunAjar } = {}) {
         recordedByGuruId: a.recordedByGuruId || null,
         recordedByName: a.recordedByGuru?.name || a.recordedByUser?.name || null,
         updatedAt: a.updatedAt ? a.updatedAt.toISOString() : null,
-      })));
+      });
+
+      if (isPaginated) {
+        const [total, items] = await Promise.all([
+          prisma.absensi.count({ where }),
+          prisma.absensi.findMany({
+            where,
+            select: selectFields,
+            orderBy: { date: 'desc' },
+            skip,
+            take: limit,
+          }),
+        ]);
+        return res.json({
+          success: true,
+          items: items.map(formatRow),
+          pagination: buildPaginationMeta(total, page, limit),
+        });
+      }
+
+      const isUnbounded = !date && !month && !studentId;
+      const items = await prisma.absensi.findMany({
+        where,
+        select: selectFields,
+        orderBy: { date: 'desc' },
+        ...(isUnbounded ? { take: 2500 } : {}),
+      });
+
+      res.json(items.map(formatRow));
     } catch (err) {
       res.status(500).json({ error: err.message });
+    }
+  });
+
+  // DB-Aggregated Annual / Semester / Monthly Piket Attendance Summary (Prisma groupBy + Pagination)
+  router.get('/absensi/summary', requireRole('admin', 'guru', 'staff', 'kepsek'), async (req, res) => {
+    try {
+      const { tahunAjarId, kelas, month, sesi = 'pagi', search = '' } = req.query;
+      const { page, limit, skip } = parsePaginationParams(
+        { ...req.query, paginated: 'true' },
+        { defaultLimit: 25, maxLimit: 200 }
+      );
+      const statusField = sesi === 'sore' ? 'statusSore' : 'statusPagi';
+
+      const targetYear = tahunAjarId && tahunAjarId !== 'all'
+        ? await prisma.tahunAjar.findUnique({ where: { id: String(tahunAjarId) } })
+        : (tahunAjarId === 'all' ? null : await resolveActiveTahunAjar());
+
+      // 1. Paginate matching students at DB level
+      const studentWhere = {};
+      const riwayatScope = targetYear ? { tahunAjarId: targetYear.id } : { tahunAjar: { isActive: true } };
+      if (kelas && kelas !== 'Semua') {
+        studentWhere.riwayatKelas = { some: { ...riwayatScope, kelas: { name: String(kelas) } } };
+      } else if (targetYear) {
+        studentWhere.riwayatKelas = { some: riwayatScope };
+      }
+      const cleanSearch = String(search || '').trim();
+      if (cleanSearch) {
+        studentWhere.OR = [
+          { name: { contains: cleanSearch, mode: 'insensitive' } },
+          { nomor: { contains: cleanSearch, mode: 'insensitive' } },
+        ];
+      }
+
+      // 2. Build Attendance where scope (for totals & groupBy)
+      const attWhere = {};
+      const attAnd = [];
+      if (kelas && kelas !== 'Semua') {
+        attAnd.push({
+          OR: [
+            { kelas: { name: String(kelas) } },
+            { student: { riwayatKelas: { some: { ...riwayatScope, kelas: { name: String(kelas) } } } } },
+          ],
+        });
+      }
+      if (targetYear) {
+        const range = getAcademicYearDateRange(targetYear);
+        if (range) {
+          attAnd.push({
+            OR: [
+              { tahunAjarId: targetYear.id },
+              { tahunAjarId: null, date: { gte: range.startDate, lte: range.endDate } },
+            ],
+          });
+        } else {
+          attWhere.tahunAjarId = targetYear.id;
+        }
+      }
+      if (month && month !== 'all') {
+        const bounds = buildMonthDateBounds(month);
+        if (bounds) attWhere.date = { gte: bounds.start, lt: bounds.end };
+      }
+      if (attAnd.length > 0) attWhere.AND = attAnd;
+
+      const [totalStudents, pageStudents, overallStatusGroups, totalBolos, dateGroups] = await Promise.all([
+        prisma.siswa.count({ where: studentWhere }),
+        prisma.siswa.findMany({
+          where: studentWhere,
+          select: {
+            id: true,
+            name: true,
+            nomor: true,
+            riwayatKelas: {
+              where: riwayatScope,
+              select: { kelas: { select: { name: true } } },
+              take: 1,
+            },
+          },
+          orderBy: { name: 'asc' },
+          skip,
+          take: limit,
+        }),
+        prisma.absensi.groupBy({
+          by: [statusField],
+          where: attWhere,
+          _count: { _all: true },
+        }),
+        prisma.absensi.count({
+          where: { ...attWhere, statusPagi: 'hadir', statusSore: 'alpha' },
+        }),
+        prisma.absensi.groupBy({
+          by: ['date', statusField],
+          where: attWhere,
+          _count: { _all: true },
+        }),
+      ]);
+
+      // Aggregate per-student stats strictly for the current page of students
+      const pageStudentIds = pageStudents.map(s => s.id);
+      const [perStudentGroups, perStudentBolos] = pageStudentIds.length > 0
+        ? await Promise.all([
+            prisma.absensi.groupBy({
+              by: ['studentId', statusField],
+              where: { ...attWhere, studentId: { in: pageStudentIds } },
+              _count: { _all: true },
+            }),
+            prisma.absensi.groupBy({
+              by: ['studentId'],
+              where: { ...attWhere, studentId: { in: pageStudentIds }, statusPagi: 'hadir', statusSore: 'alpha' },
+              _count: { _all: true },
+            }),
+          ])
+        : [[], []];
+
+      const totals = { hadir: 0, izin: 0, sakit: 0, alpha: 0, bolos: totalBolos, totalRecords: 0, attendanceRate: 0 };
+      for (const grp of overallStatusGroups) {
+        const st = grp[statusField];
+        if (st && totals[st] !== undefined) {
+          totals[st] += grp._count._all;
+          totals.totalRecords += grp._count._all;
+        }
+      }
+      totals.attendanceRate = totals.totalRecords > 0 ? Math.round((totals.hadir / totals.totalRecords) * 100) : 0;
+
+      // Bucket dateGroups by YYYY-MM for monthlyTrend
+      const monthlyMap = new Map();
+      for (const dg of dateGroups) {
+        const mKey = dg.date.toISOString().slice(0, 7);
+        const st = dg[statusField];
+        if (!monthlyMap.has(mKey)) {
+          monthlyMap.set(mKey, { month: mKey, hadir: 0, izin: 0, sakit: 0, alpha: 0, total: 0 });
+        }
+        const bucket = monthlyMap.get(mKey);
+        if (st && bucket[st] !== undefined) {
+          bucket[st] += dg._count._all;
+          bucket.total += dg._count._all;
+        }
+      }
+      const monthlyTrend = Array.from(monthlyMap.values())
+        .sort((a, b) => a.month.localeCompare(b.month))
+        .map(m => ({ ...m, attendanceRate: m.total > 0 ? Math.round((m.hadir / m.total) * 100) : 0 }));
+
+      const bolosByStudent = new Map(perStudentBolos.map(b => [b.studentId, b._count._all]));
+      const statsByStudent = new Map();
+      for (const g of perStudentGroups) {
+        if (!statsByStudent.has(g.studentId)) {
+          statsByStudent.set(g.studentId, { hadir: 0, izin: 0, sakit: 0, alpha: 0 });
+        }
+        const st = g[statusField];
+        if (st && statsByStudent.get(g.studentId)[st] !== undefined) {
+          statsByStudent.get(g.studentId)[st] += g._count._all;
+        }
+      }
+
+      const items = pageStudents.map(st => {
+        const counts = statsByStudent.get(st.id) || { hadir: 0, izin: 0, sakit: 0, alpha: 0 };
+        const totalRec = counts.hadir + counts.izin + counts.sakit + counts.alpha;
+        return {
+          studentId: st.id,
+          studentName: st.name,
+          nis: st.nomor || '-',
+          class: st.riwayatKelas?.[0]?.kelas?.name || kelas || '-',
+          ...counts,
+          bolos: bolosByStudent.get(st.id) || 0,
+          totalRecords: totalRec,
+          attendanceRate: totalRec > 0 ? Math.round((counts.hadir / totalRec) * 100) : 0,
+        };
+      });
+
+      res.json({
+        success: true,
+        tahunAjar: targetYear
+          ? { id: targetYear.id, nama: targetYear.nama, semester: targetYear.semester }
+          : null,
+        kelas: kelas || 'Semua',
+        month: month || 'all',
+        sesi: sesi === 'sore' ? 'sore' : 'pagi',
+        totals,
+        monthlyTrend,
+        items,
+        pagination: buildPaginationMeta(totalStudents, page, limit),
+      });
+    } catch (err) {
+      console.error('GET /api/absensi/summary error:', err);
+      res.status(500).json({ success: false, error: err.message });
     }
   });
 
@@ -625,7 +918,7 @@ export function createExtraPrismaRoutes(prisma, { getActiveTahunAjar } = {}) {
                 id: true,
                 riwayatKelas: {
                   where: { tahunAjar: { isActive: true } },
-                  select: { kelasId: true },
+                  select: { kelasId: true, kelas: { select: { name: true } } },
                   take: 1,
                 },
               },
@@ -638,6 +931,9 @@ export function createExtraPrismaRoutes(prisma, { getActiveTahunAjar } = {}) {
 
       const studentClassMap = new Map(
         validStudents.map(s => [s.id, s.riwayatKelas?.[0]?.kelasId || null])
+      );
+      const studentClassNameMap = new Map(
+        validStudents.map(s => [s.id, s.riwayatKelas?.[0]?.kelas?.name || null])
       );
       const recordedByUserId = req.authUser?.id || null;
       const recordedByGuruId = validRecorderGuru?.id || null;
@@ -839,6 +1135,44 @@ export function createExtraPrismaRoutes(prisma, { getActiveTahunAjar } = {}) {
       if (result.saved.length === 0) {
         return res.status(400).json({ success: false, error: 'Tidak ada data siswa atau status absensi yang valid.' });
       }
+
+      const todayJakarta = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Jakarta' }).format(new Date());
+      const backdatedDates = [...new Set(result.saved.map(s => s.date).filter(d => d && d < todayJakarta))];
+      if (backdatedDates.length > 0) {
+        logAudit(req, {
+          action: 'ATTENDANCE_BACKDATED_EDIT',
+          target: `Tanggal ${backdatedDates.join(', ')}`,
+          detail: { session: cleanSession || 'both', savedCount: result.saved.length },
+        });
+      }
+
+      const affectedClassNames = [...new Set(
+        result.saved.map(s => studentClassNameMap.get(s.studentId)).filter(Boolean)
+      )];
+      const affectedStudentIds = [...new Set(result.saved.map(s => s.studentId).filter(Boolean))];
+      realtimeHub.publish({
+        type: 'attendance:updated',
+        classNames: affectedClassNames,
+        studentIds: affectedStudentIds,
+        date: result.saved[0]?.date || null,
+        session: cleanSession || 'both',
+        updatedBy: req.authUser?.name || null,
+      });
+
+      // Non-blocking automatic Alpha & Bolos notification dispatch + live push
+      dispatchAttendanceNotifications(result.saved)
+        .then((triggeredCount) => {
+          if (triggeredCount > 0) {
+            realtimeHub.publish({
+              type: 'notification:created',
+              classNames: affectedClassNames,
+              studentIds: affectedStudentIds,
+              date: result.saved[0]?.date || null,
+              updatedBy: req.authUser?.name || null,
+            });
+          }
+        })
+        .catch(() => {});
 
       res.json({
         success: true,
@@ -1301,7 +1635,7 @@ export function createExtraPrismaRoutes(prisma, { getActiveTahunAjar } = {}) {
         const foundMapel = await prisma.mataPelajaran.findFirst({ where: { nama: String(subject).trim() } });
         resolvedMapelId = foundMapel?.id;
       }
-      await prisma.nilai.update({
+      const updated = await prisma.nilai.update({
         where: { id: req.params.id },
         data: {
           ...(resolvedMapelId ? { mapelId: resolvedMapelId } : {}),
@@ -1309,6 +1643,12 @@ export function createExtraPrismaRoutes(prisma, { getActiveTahunAjar } = {}) {
           score: Math.round(numScore),
           ...(maxScore ? { maxScore: Number(maxScore) } : {}),
         },
+        include: { siswa: true, mapel: true },
+      });
+      await logAudit(req, {
+        action: 'GRADE_UPDATE',
+        target: `${updated.siswa?.name || updated.siswaId} (${updated.mapel?.nama || updated.mapelId} - ${updated.jenis})`,
+        detail: { score: updated.score },
       });
       res.json({ success: true, message: 'Nilai siswa berhasil diperbarui.' });
     } catch (err) {
@@ -1318,7 +1658,18 @@ export function createExtraPrismaRoutes(prisma, { getActiveTahunAjar } = {}) {
 
   router.delete('/nilai/:id', requireRole('admin', 'guru'), async (req, res) => {
     try {
+      const existing = await prisma.nilai.findUnique({
+        where: { id: req.params.id },
+        include: { siswa: true, mapel: true },
+      });
       await prisma.nilai.delete({ where: { id: req.params.id } });
+      if (existing) {
+        await logAudit(req, {
+          action: 'GRADE_DELETE',
+          target: `${existing.siswa?.name || existing.siswaId} (${existing.mapel?.nama || existing.mapelId} - ${existing.jenis})`,
+          detail: { previousScore: existing.score },
+        });
+      }
       res.json({ success: true, message: 'Data nilai berhasil dihapus.' });
     } catch (err) {
       res.status(500).json({ success: false, error: err.message });

@@ -3,7 +3,9 @@
    ============================================================ */
 
 import { useState, useEffect } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '../../hooks/useAuth';
+import { invalidateAttendanceQueries } from '../../hooks/useRealtimeSync';
 import {
   getSchedule, getStudents, saveSubjectAttendance, getSubjectAttendance
 } from '../../services/api';
@@ -18,6 +20,7 @@ const STATUS_OPTIONS = [
 
 export default function MobileAbsenMapelPage() {
   const { user } = useAuth();
+  const queryClient = useQueryClient();
   const todayIdx = new Date().getDay();
   const todayName = DAYS[todayIdx - 1] || 'Senin';
   const todayDate = new Date().toISOString().split('T')[0];
@@ -68,9 +71,12 @@ export default function MobileAbsenMapelPage() {
       jamKe: selectedSched.jamKe, status: attendance[s.id] || 'hadir',
       guruId: user?.id,
     }));
-    await saveSubjectAttendance(records);
+    const res = await saveSubjectAttendance(records);
     setSaving(false);
-    setSaved(true);
+    if (res?.success !== false) {
+      invalidateAttendanceQueries(queryClient);
+      setSaved(true);
+    }
   };
 
   if (step === 2 && selectedSched) {

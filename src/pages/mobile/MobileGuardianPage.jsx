@@ -47,6 +47,7 @@ export default function MobileGuardianPage() {
   const { data, isLoading, refetch, isFetching } = useQuery({
     queryKey: ['guardian-overview', month],
     queryFn: () => getGuardianOverview(month),
+    placeholderData: (prev) => prev,
   });
 
   if (isLoading) {
@@ -115,7 +116,7 @@ export default function MobileGuardianPage() {
             <div style={{ fontSize: '11px', opacity: 0.85, fontWeight: 600, letterSpacing: '0.4px', textTransform: 'uppercase' }}>
               Portal Pantau Wali Murid
             </div>
-            <h1 style={{ fontSize: '19px', fontWeight: 800, marginTop: '4px', lineHeight: 1.25 }}>
+            <h1 style={{ fontSize: '19px', fontWeight: 800, marginTop: '4px', lineHeight: 1.25, color: '#FFFFFF' }}>
               {student.name}
             </h1>
             <div style={{ fontSize: '12px', opacity: 0.9, marginTop: '4px' }}>

@@ -1,7 +1,16 @@
 /* AbsensiPage — Monitoring Absensi Siswa (Piket & Mapel) */
 
 import { useState, useEffect, useMemo, Fragment } from 'react';
-import { getAttendance, getSubjectAttendance, getClasses, getSubjects, getStudents, getAcademicYears } from '../../services/api';
+import {
+  getAttendance,
+  getAttendanceSummary,
+  getSubjectAttendance,
+  getSubjectAttendanceRekap,
+  getClasses,
+  getSubjects,
+  getStudents,
+  getAcademicYears,
+} from '../../services/api';
 import Card from '../../components/ui/Card';
 import Table from '../../components/ui/Table';
 import Badge from '../../components/ui/Badge';
@@ -9,6 +18,7 @@ import Button from '../../components/ui/Button';
 import LoadingSpinner from '../../components/ui/LoadingSpinner';
 import StudentDetailModal from '../../components/ui/StudentDetailModal';
 import Toast from '../../components/ui/Toast';
+import PaginationBar from '../../components/ui/PaginationBar';
 import AttendanceTrendChart from '../../components/dashboard/AttendanceTrendChart';
 
 export default function AbsensiPage() {
@@ -16,10 +26,12 @@ export default function AbsensiPage() {
 
   const [classes, setClasses] = useState([]);
   const [subjects, setSubjects] = useState([]);
+  const [academicYears, setAcademicYears] = useState([]);
+  const [selectedYearId, setSelectedYearId] = useState('');
   const [selectedClass, setSelectedClass] = useState('');
-  
-  // Piket States
-  const [viewMode, setViewMode] = useState('daily'); // 'daily' | 'monthly'
+
+  // View Mode: 'daily' | 'monthly' | 'summary' (DB-aggregated annual/semester rekap + pagination)
+  const [viewMode, setViewMode] = useState('daily');
   const [attendancePiket, setAttendancePiket] = useState([]);
   const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
   const [sesi, setSesi] = useState('pagi'); /* 'pagi' | 'sore' */
@@ -38,10 +50,39 @@ export default function AbsensiPage() {
   const [rekapLoading, setRekapLoading] = useState(false);
   const [availableMonths, setAvailableMonths] = useState([]);
 
+  // DB-Aggregated Annual/Semester Summary + Server Pagination States
+  const [summaryClass, setSummaryClass] = useState('Semua');
+  const [summaryMonth, setSummaryMonth] = useState('all'); // 'all' | 'YYYY-MM'
+  const [summarySearch, setSummarySearch] = useState('');
+  const [debouncedSummarySearch, setDebouncedSummarySearch] = useState('');
+  const [summaryPage, setSummaryPage] = useState(1);
+  const [summaryLimit, setSummaryLimit] = useState(25);
+  const [summaryLoading, setSummaryLoading] = useState(false);
+  const [summaryResult, setSummaryResult] = useState(null);
+
   // Modal States
   const [selectedProfileId, setSelectedProfileId] = useState(null);
   const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
   const [toast, setToast] = useState(null);
+  const [realtimeTick, setRealtimeTick] = useState(0);
+
+  useEffect(() => {
+    let debounceTimer = null;
+    const handleRealtime = (event) => {
+      const type = event?.detail?.type;
+      if (type === 'attendance:updated' || type === 'subject-attendance:updated' || type === 'sync:resumed') {
+        if (debounceTimer) clearTimeout(debounceTimer);
+        debounceTimer = setTimeout(() => {
+          setRealtimeTick((t) => t + 1);
+        }, 150);
+      }
+    };
+    window.addEventListener('sia-realtime-update', handleRealtime);
+    return () => {
+      if (debounceTimer) clearTimeout(debounceTimer);
+      window.removeEventListener('sia-realtime-update', handleRealtime);
+    };
+  }, []);
 
   const openStudentProfile = (studentId) => {
     setSelectedProfileId(studentId);
@@ -49,61 +90,81 @@ export default function AbsensiPage() {
   };
 
   useEffect(() => {
+    const t = setTimeout(() => {
+      setDebouncedSummarySearch(summarySearch);
+      setSummaryPage(1);
+    }, 250);
+    return () => clearTimeout(t);
+  }, [summarySearch]);
+
+  useEffect(() => {
     Promise.all([getClasses(), getSubjects(), getAcademicYears()]).then(([clsData, subData, yearsData]) => {
       setClasses(clsData);
       setSubjects(subData);
+      setAcademicYears(yearsData);
       if (clsData.length > 0) setSelectedClass(clsData[0].name);
       if (subData.length > 0) setSelectedSubject(subData[0].nama || subData[0].name || '');
 
-      const activeYear = yearsData.find(y => y.isActive);
-      if (activeYear && activeYear.startDate && activeYear.endDate) {
-        const start = new Date(activeYear.startDate);
-        const end = new Date(activeYear.endDate);
-        const months = [];
-        let current = new Date(start.getFullYear(), start.getMonth(), 1);
-        while (current <= end) {
-          months.push({
-            value: current.toISOString().substring(0, 7),
-            label: current.toLocaleDateString('id-ID', { month: 'long', year: 'numeric' })
-          });
-          current.setMonth(current.getMonth() + 1);
-        }
-        setAvailableMonths(months);
-        setRekapMonth(prev => months.some(m => m.value === prev) ? prev : (months[0]?.value || prev));
+      const activeYear = yearsData.find(y => y.isActive) || yearsData[0];
+      if (activeYear?.id) {
+        setSelectedYearId(activeYear.id);
       }
     });
   }, []);
 
+  // Recompute available months whenever selected academic year changes
+  useEffect(() => {
+    const chosenYear = academicYears.find(y => y.id === selectedYearId);
+    if (chosenYear && chosenYear.startDate && chosenYear.endDate) {
+      const start = new Date(chosenYear.startDate);
+      const end = new Date(chosenYear.endDate);
+      const months = [];
+      const current = new Date(start.getFullYear(), start.getMonth(), 1);
+      while (current <= end) {
+        months.push({
+          value: current.toISOString().substring(0, 7),
+          label: current.toLocaleDateString('id-ID', { month: 'long', year: 'numeric' }),
+        });
+        current.setMonth(current.getMonth() + 1);
+      }
+      setAvailableMonths(months);
+      setRekapMonth(prev => (months.some(m => m.value === prev) ? prev : (months[0]?.value || prev)));
+    } else {
+      setAvailableMonths([]);
+    }
+  }, [academicYears, selectedYearId]);
+
   // Fetch Piket Daily
   useEffect(() => {
     if (selectedClass && activeTab === 'piket' && viewMode === 'daily') {
-      setLoadingPiket(true);
-      getAttendance(selectedClass, selectedDate).then(data => {
+      if (realtimeTick === 0) setLoadingPiket(true);
+      getAttendance(selectedClass, selectedDate, null, { tahunAjarId: selectedYearId || undefined }).then(data => {
         setAttendancePiket(data);
         setLoadingPiket(false);
       });
     }
-  }, [selectedClass, selectedDate, activeTab, viewMode]);
+  }, [selectedClass, selectedDate, selectedYearId, activeTab, viewMode, realtimeTick]);
 
   // Fetch Mapel (Daily)
   useEffect(() => {
     if (selectedClass && selectedSubject && activeTab === 'mapel' && viewMode === 'daily') {
-      setLoadingMapel(true);
-      getSubjectAttendance(selectedClass, selectedDate, selectedSubject).then(data => {
+      if (realtimeTick === 0) setLoadingMapel(true);
+      getSubjectAttendance(selectedClass, selectedDate, selectedSubject, null, { tahunAjarId: selectedYearId || undefined }).then(data => {
         setAttendanceMapel(data);
         setLoadingMapel(false);
       });
     }
-  }, [selectedClass, selectedDate, selectedSubject, activeTab, viewMode]);
+  }, [selectedClass, selectedDate, selectedSubject, selectedYearId, activeTab, viewMode, realtimeTick]);
 
-  // Fetch Rekap (Monthly)
+  // Fetch Rekap (Monthly Matrix)
   useEffect(() => {
     if (selectedClass && viewMode === 'monthly') {
-      setRekapLoading(true);
+      if (realtimeTick === 0) setRekapLoading(true);
+      const yearOpts = { tahunAjarId: selectedYearId || undefined };
       if (activeTab === 'piket') {
         Promise.all([
-          getStudents(selectedClass),
-          getAttendance(selectedClass, null, rekapMonth)
+          getStudents(selectedClass, yearOpts),
+          getAttendance(selectedClass, null, rekapMonth, yearOpts),
         ]).then(([studentsData, attData]) => {
           setStudents(studentsData);
           setRekapData(attData);
@@ -111,8 +172,8 @@ export default function AbsensiPage() {
         });
       } else if (activeTab === 'mapel') {
         Promise.all([
-          getStudents(selectedClass),
-          getSubjectAttendance(selectedClass, null, selectedSubject, rekapMonth)
+          getStudents(selectedClass, yearOpts),
+          getSubjectAttendance(selectedClass, null, selectedSubject, rekapMonth, yearOpts),
         ]).then(([studentsData, attData]) => {
           setStudents(studentsData);
           setRekapMapelData(attData);
@@ -120,7 +181,45 @@ export default function AbsensiPage() {
         });
       }
     }
-  }, [selectedClass, selectedSubject, rekapMonth, activeTab, viewMode]);
+  }, [selectedClass, selectedSubject, rekapMonth, selectedYearId, activeTab, viewMode, realtimeTick]);
+
+  // Fetch DB-Aggregated Annual / Semester Summary + Pagination
+  useEffect(() => {
+    if (viewMode !== 'summary') return;
+    let cancelled = false;
+    setSummaryLoading(true);
+
+    const fetcher =
+      activeTab === 'piket'
+        ? getAttendanceSummary({
+            tahunAjarId: selectedYearId || undefined,
+            kelas: summaryClass,
+            month: summaryMonth,
+            sesi,
+            search: debouncedSummarySearch,
+            page: summaryPage,
+            limit: summaryLimit,
+          })
+        : getSubjectAttendanceRekap({
+            tahunAjarId: selectedYearId || undefined,
+            kelas: summaryClass,
+            month: summaryMonth,
+            mapel: selectedSubject || 'Semua',
+            search: debouncedSummarySearch,
+            page: summaryPage,
+            limit: summaryLimit,
+          });
+
+    fetcher.then(res => {
+      if (cancelled) return;
+      setSummaryResult(res);
+      setSummaryLoading(false);
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [viewMode, activeTab, selectedYearId, summaryClass, summaryMonth, sesi, selectedSubject, debouncedSummarySearch, summaryPage, summaryLimit, realtimeTick]);
 
   // Index rekap records in O(1) Maps for fast monthly grid render & Excel export
   const rekapPiketMap = useMemo(() => {
@@ -191,7 +290,56 @@ export default function AbsensiPage() {
     let exportData = [];
     let fileName = '';
 
-    if (activeTab === 'piket') {
+    if (viewMode === 'summary') {
+      if (activeTab === 'piket') {
+        const fullRes = await getAttendanceSummary({
+          tahunAjarId: selectedYearId || undefined,
+          kelas: summaryClass,
+          month: summaryMonth,
+          sesi,
+          search: debouncedSummarySearch,
+          page: 1,
+          limit: 200,
+        });
+        exportData = (fullRes?.items || []).map((row, idx) => ({
+          'No': idx + 1,
+          'NIS': row.nis || '-',
+          'Nama Siswa': row.studentName,
+          'Kelas': row.class,
+          'Hadir': row.hadir,
+          'Izin': row.izin,
+          'Sakit': row.sakit,
+          'Alpha': row.alpha,
+          'Bolos Sore': row.bolos || 0,
+          'Total Tercatat': row.totalRecords,
+          '% Kehadiran': `${row.attendanceRate}%`,
+        }));
+        fileName = `Rekap_Periode_Piket_${sesi.toUpperCase()}_${summaryClass}_${summaryMonth}.xlsx`;
+      } else {
+        const fullRes = await getSubjectAttendanceRekap({
+          tahunAjarId: selectedYearId || undefined,
+          kelas: summaryClass,
+          month: summaryMonth,
+          mapel: selectedSubject || 'Semua',
+          search: debouncedSummarySearch,
+          page: 1,
+          limit: 200,
+        });
+        exportData = (fullRes?.rekap || []).map((row, idx) => ({
+          'No': idx + 1,
+          'NIS': row.nis || '-',
+          'Nama Siswa': row.studentName,
+          'Kelas': row.class,
+          'Hadir': row.hadir,
+          'Izin': row.izin,
+          'Sakit': row.sakit,
+          'Alpha': row.alpha,
+          'Total Sesi': row.totalSesi,
+          '% Kehadiran': `${row.persentase}%`,
+        }));
+        fileName = `Rekap_Periode_Mapel_${summaryClass}_${summaryMonth}.xlsx`;
+      }
+    } else if (activeTab === 'piket') {
       if (viewMode === 'daily') {
         exportData = attendancePiket.map((a, i) => ({
           'No': i + 1,
@@ -521,47 +669,156 @@ export default function AbsensiPage() {
       </div>
 
       {/* Main Tabs */}
-      <div style={{ marginBottom: 'var(--space-6)', display: 'flex', gap: 'var(--space-4)', borderBottom: '1px solid var(--color-border-light)' }}>
-        <button style={mainTabStyle(activeTab === 'piket')} onClick={() => {
-          setActiveTab('piket');
-          setViewMode('daily'); // Reset to daily by default when switching to piket
-        }}>
+      <div style={{ marginBottom: 'var(--space-5)', display: 'flex', gap: 'var(--space-4)', borderBottom: '1px solid var(--color-border-light)' }}>
+        <button
+          style={mainTabStyle(activeTab === 'piket')}
+          onClick={() => {
+            setActiveTab('piket');
+            setSummaryPage(1);
+          }}
+        >
           Absensi Piket
         </button>
-        <button style={mainTabStyle(activeTab === 'mapel')} onClick={() => setActiveTab('mapel')}>
+        <button
+          style={mainTabStyle(activeTab === 'mapel')}
+          onClick={() => {
+            setActiveTab('mapel');
+            setSummaryPage(1);
+          }}
+        >
           Absen per Mata Pelajaran
         </button>
       </div>
 
       {/* Filters Row */}
       <div style={{
-        display: 'flex', 
-        justifyContent: 'space-between', 
-        alignItems: 'flex-end', 
-        marginBottom: 'var(--space-4)', 
-        flexWrap: 'wrap', 
-        gap: 'var(--space-3)'
+        display: 'flex',
+        justifyContent: 'space-between',
+        alignItems: 'flex-end',
+        marginBottom: 'var(--space-4)',
+        flexWrap: 'wrap',
+        gap: 'var(--space-3)',
       }}>
         {/* Left side filters */}
         <div style={{ display: 'flex', gap: 'var(--space-3)', flexWrap: 'wrap', alignItems: 'flex-end' }}>
+          {/* Tahun Ajaran Filter (Scoping across all reports) */}
+          <div>
+            <label style={{ display: 'block', fontSize: '11px', fontWeight: 'var(--font-weight-semibold)', marginBottom: '4px', color: 'var(--color-text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+              Tahun Ajaran
+            </label>
+            <select
+              value={selectedYearId}
+              onChange={(e) => {
+                setSelectedYearId(e.target.value);
+                setSummaryMonth('all');
+                setSummaryPage(1);
+              }}
+              style={{
+                padding: '8px 12px',
+                borderRadius: 'var(--radius-md)',
+                border: '1px solid var(--color-border)',
+                fontSize: 'var(--font-size-sm)',
+                background: 'var(--color-surface)',
+                minWidth: '185px',
+              }}
+            >
+              {academicYears.map(y => (
+                <option key={y.id} value={y.id}>
+                  {y.nama} Smt {y.semester} {y.isActive ? '(Aktif)' : ''}
+                </option>
+              ))}
+              <option value="all">Semua Periode</option>
+            </select>
+          </div>
+
+          {/* Kelas Filter */}
           <div>
             <label style={{ display: 'block', fontSize: '11px', fontWeight: 'var(--font-weight-semibold)', marginBottom: '4px', color: 'var(--color-text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
               Kelas
             </label>
-            <select
-              value={selectedClass}
-              onChange={(e) => setSelectedClass(e.target.value)}
-              style={{
-                padding: '8px 14px', borderRadius: 'var(--radius-md)',
-                border: '1px solid var(--color-border)', fontSize: 'var(--font-size-sm)',
-                background: 'var(--color-surface)', minWidth: '150px',
-              }}
-            >
-              {classes.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
-            </select>
+            {viewMode === 'summary' ? (
+              <select
+                value={summaryClass}
+                onChange={(e) => {
+                  setSummaryClass(e.target.value);
+                  setSummaryPage(1);
+                }}
+                style={{
+                  padding: '8px 14px',
+                  borderRadius: 'var(--radius-md)',
+                  border: '1px solid var(--color-border)',
+                  fontSize: 'var(--font-size-sm)',
+                  background: 'var(--color-surface)',
+                  minWidth: '150px',
+                }}
+              >
+                <option value="Semua">Semua Kelas</option>
+                {classes.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
+              </select>
+            ) : (
+              <select
+                value={selectedClass}
+                onChange={(e) => setSelectedClass(e.target.value)}
+                style={{
+                  padding: '8px 14px',
+                  borderRadius: 'var(--radius-md)',
+                  border: '1px solid var(--color-border)',
+                  fontSize: 'var(--font-size-sm)',
+                  background: 'var(--color-surface)',
+                  minWidth: '150px',
+                }}
+              >
+                {classes.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
+              </select>
+            )}
           </div>
-          
-          {viewMode === 'monthly' ? (
+
+          {viewMode === 'summary' ? (
+            <>
+              <div>
+                <label style={{ display: 'block', fontSize: '11px', fontWeight: 'var(--font-weight-semibold)', marginBottom: '4px', color: 'var(--color-text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                  Rentang Bulan
+                </label>
+                <select
+                  value={summaryMonth}
+                  onChange={(e) => {
+                    setSummaryMonth(e.target.value);
+                    setSummaryPage(1);
+                  }}
+                  style={{
+                    padding: '8px 12px',
+                    borderRadius: 'var(--radius-md)',
+                    border: '1px solid var(--color-border)',
+                    fontSize: 'var(--font-size-sm)',
+                    background: 'var(--color-surface)',
+                    minWidth: '175px',
+                  }}
+                >
+                  <option value="all">Seluruh Semester / Tahun</option>
+                  {availableMonths.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
+                </select>
+              </div>
+              <div>
+                <label style={{ display: 'block', fontSize: '11px', fontWeight: 'var(--font-weight-semibold)', marginBottom: '4px', color: 'var(--color-text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                  Cari Siswa
+                </label>
+                <input
+                  type="text"
+                  placeholder="Nama atau NIS..."
+                  value={summarySearch}
+                  onChange={(e) => setSummarySearch(e.target.value)}
+                  style={{
+                    padding: '8px 12px',
+                    borderRadius: 'var(--radius-md)',
+                    border: '1px solid var(--color-border)',
+                    fontSize: 'var(--font-size-sm)',
+                    background: 'var(--color-surface)',
+                    minWidth: '165px',
+                  }}
+                />
+              </div>
+            </>
+          ) : viewMode === 'monthly' ? (
             <div>
               <label style={{ display: 'block', fontSize: '11px', fontWeight: 'var(--font-weight-semibold)', marginBottom: '4px', color: 'var(--color-text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
                 Bulan
@@ -573,7 +830,7 @@ export default function AbsensiPage() {
                   style={{
                     padding: '8px 14px', borderRadius: 'var(--radius-md)',
                     border: '1px solid var(--color-border)', fontSize: 'var(--font-size-sm)',
-                    background: 'var(--color-surface)', minWidth: '150px'
+                    background: 'var(--color-surface)', minWidth: '150px',
                   }}
                 >
                   {availableMonths.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
@@ -621,13 +878,17 @@ export default function AbsensiPage() {
               </label>
               <select
                 value={selectedSubject}
-                onChange={(e) => setSelectedSubject(e.target.value)}
+                onChange={(e) => {
+                  setSelectedSubject(e.target.value);
+                  setSummaryPage(1);
+                }}
                 style={{
                   padding: '8px 14px', borderRadius: 'var(--radius-md)',
                   border: '1px solid var(--color-border)', fontSize: 'var(--font-size-sm)',
-                  background: 'var(--color-surface)', minWidth: '200px',
+                  background: 'var(--color-surface)', minWidth: '185px',
                 }}
               >
+                {viewMode === 'summary' && <option value="Semua">Semua Mapel</option>}
                 {subjects.map(s => {
                   const label = s.nama || s.name;
                   return <option key={s.id} value={label}>{label}</option>;
@@ -637,48 +898,214 @@ export default function AbsensiPage() {
           )}
         </div>
 
-        {/* Right side buttons (Toggle View for Piket and Mapel) */}
-        <div>
-          <Button 
-            variant="primary" 
-            onClick={() => setViewMode(viewMode === 'daily' ? 'monthly' : 'daily')}
-            style={{
-              backgroundColor: '#3B82F6', 
-              color: 'white',
-              border: 'none',
-              height: '38px',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '8px'
-            }}
-          >
-            {viewMode === 'daily' ? '📊 Lihat Rekap Bulanan' : '📝 Lihat Absen Harian'}
-          </Button>
+        {/* Right side: 3-Mode View Switcher */}
+        <div
+          style={{
+            display: 'inline-flex',
+            background: 'var(--color-surface-alt)',
+            padding: '4px',
+            borderRadius: 'var(--radius-md)',
+            border: '1px solid var(--color-border)',
+            gap: '4px',
+          }}
+        >
+          {[
+            { id: 'daily', label: 'Harian' },
+            { id: 'monthly', label: 'Matriks Bulanan' },
+            { id: 'summary', label: 'Rekap Periode / Tahunan' },
+          ].map(tab => (
+            <button
+              key={tab.id}
+              type="button"
+              onClick={() => {
+                setViewMode(tab.id);
+                if (tab.id === 'summary') setSummaryPage(1);
+              }}
+              style={{
+                padding: '6px 12px',
+                borderRadius: 'var(--radius-sm)',
+                border: 'none',
+                background: viewMode === tab.id ? 'var(--color-primary)' : 'transparent',
+                color: viewMode === tab.id ? '#FFFFFF' : 'var(--color-text-secondary)',
+                fontSize: 'var(--font-size-xs)',
+                fontWeight: viewMode === tab.id ? 700 : 600,
+                cursor: 'pointer',
+                transition: 'all var(--transition-fast)',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              {tab.label}
+            </button>
+          ))}
         </div>
       </div>
 
-      {/* Daily Attendance Trend Visualization (Recharts) */}
-      <AttendanceTrendChart
-        activeTab={activeTab}
-        selectedClass={selectedClass}
-        selectedSubject={selectedSubject}
-        sesi={sesi}
-        month={viewMode === 'monthly' ? rekapMonth : (selectedDate ? selectedDate.substring(0, 7) : rekapMonth)}
-        selectedDate={selectedDate}
-        preloadedRecords={
-          viewMode === 'monthly' && !rekapLoading
-            ? (activeTab === 'piket' ? rekapData : rekapMapelData)
-            : null
-        }
-        onSelectDate={(dateStr) => {
-          setSelectedDate(dateStr);
-          setViewMode('daily');
-        }}
-        onJumpToMonth={(targetMonth, targetDate) => {
-          setRekapMonth(targetMonth);
-          if (targetDate) setSelectedDate(targetDate);
-        }}
-      />
+      {/* Daily Attendance Trend Visualization (Recharts) — hidden in summary mode to keep focus crisp */}
+      {viewMode !== 'summary' && (
+        <AttendanceTrendChart
+          activeTab={activeTab}
+          selectedClass={selectedClass}
+          selectedSubject={selectedSubject}
+          sesi={sesi}
+          tahunAjarId={selectedYearId}
+          month={viewMode === 'monthly' ? rekapMonth : (selectedDate ? selectedDate.substring(0, 7) : rekapMonth)}
+          selectedDate={selectedDate}
+          preloadedRecords={
+            viewMode === 'monthly' && !rekapLoading
+              ? (activeTab === 'piket' ? rekapData : rekapMapelData)
+              : null
+          }
+          onSelectDate={(dateStr) => {
+            setSelectedDate(dateStr);
+            setViewMode('daily');
+          }}
+          onJumpToMonth={(targetMonth, targetDate) => {
+            setRekapMonth(targetMonth);
+            if (targetDate) setSelectedDate(targetDate);
+          }}
+        />
+      )}
+
+      {/* DB-Aggregated Annual / Semester Summary View */}
+      {viewMode === 'summary' && (
+        <>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: 'var(--space-2)', marginBottom: 'var(--space-4)', fontVariantNumeric: 'tabular-nums' }}>
+            {[
+              { label: 'Tingkat Hadir', value: `${summaryResult?.totals?.attendanceRate ?? 0}%`, color: '#1D4ED8', bg: '#EFF6FF' },
+              { label: 'Total Hadir', value: summaryResult?.totals?.hadir ?? 0, color: '#059669', bg: '#ECFDF5' },
+              { label: 'Izin', value: summaryResult?.totals?.izin ?? 0, color: '#0284C7', bg: '#F0F9FF' },
+              { label: 'Sakit', value: summaryResult?.totals?.sakit ?? 0, color: '#D97706', bg: '#FFFBEB' },
+              { label: 'Alpha', value: summaryResult?.totals?.alpha ?? 0, color: '#DC2626', bg: '#FEF2F2' },
+              activeTab === 'piket'
+                ? { label: 'Bolos Sore', value: summaryResult?.totals?.bolos ?? 0, color: '#991B1B', bg: '#FEE2E2' }
+                : { label: 'Sesi Guru', value: summaryResult?.totalSesiGuru ?? 0, color: '#4338CA', bg: '#EEF2FF' },
+            ].map((item) => (
+              <div key={item.label} style={{ padding: '12px', textAlign: 'center', background: item.bg, borderRadius: 'var(--radius-lg)' }}>
+                <div style={{ fontSize: 'var(--font-size-xl)', fontWeight: 'var(--font-weight-extrabold)', color: item.color }}>{item.value}</div>
+                <div style={{ fontSize: '11px', color: item.color, fontWeight: 'var(--font-weight-semibold)', marginTop: '2px' }}>{item.label}</div>
+              </div>
+            ))}
+          </div>
+
+          <Card padding="0">
+            {summaryLoading ? (
+              <LoadingSpinner message="Menghitung agregasi absensi periode..." />
+            ) : (
+              <>
+                <Table
+                  columns={
+                    activeTab === 'piket'
+                      ? [
+                          {
+                            key: 'no',
+                            label: 'No',
+                            width: '48px',
+                            render: (_, __, i) => (
+                              <span style={{ fontVariantNumeric: 'tabular-nums' }}>
+                                {((summaryResult?.pagination?.page || 1) - 1) * (summaryResult?.pagination?.limit || summaryLimit) + i + 1}
+                              </span>
+                            ),
+                          },
+                          {
+                            key: 'studentName',
+                            label: 'Nama Siswa',
+                            render: (_, row) => (
+                              <div>
+                                <button
+                                  onClick={() => openStudentProfile(row.studentId)}
+                                  style={{ color: 'var(--color-primary)', background: 'none', border: 'none', cursor: 'pointer', fontWeight: 700, padding: 0, textAlign: 'left' }}
+                                >
+                                  {row.studentName}
+                                </button>
+                                <div style={{ fontSize: '11px', color: 'var(--color-text-muted)', fontVariantNumeric: 'tabular-nums' }}>
+                                  NIS: {row.nis || '-'}
+                                </div>
+                              </div>
+                            ),
+                          },
+                          { key: 'class', label: 'Kelas', width: '110px', render: (val) => <Badge variant="primary">{val || '-'}</Badge> },
+                          { key: 'hadir', label: 'H', width: '58px', cellStyle: { textAlign: 'center', fontWeight: 700, color: '#059669' } },
+                          { key: 'izin', label: 'I', width: '58px', cellStyle: { textAlign: 'center', fontWeight: 700, color: '#2563EB' } },
+                          { key: 'sakit', label: 'S', width: '58px', cellStyle: { textAlign: 'center', fontWeight: 700, color: '#D97706' } },
+                          { key: 'alpha', label: 'A', width: '58px', cellStyle: { textAlign: 'center', fontWeight: 700, color: '#DC2626' } },
+                          {
+                            key: 'bolos',
+                            label: 'Bolos',
+                            width: '72px',
+                            cellStyle: { textAlign: 'center' },
+                            render: (val) => (val > 0 ? <Badge variant="danger">{val}x</Badge> : <span style={{ color: 'var(--color-text-muted)' }}>0</span>),
+                          },
+                          {
+                            key: 'attendanceRate',
+                            label: '% Hadir',
+                            width: '92px',
+                            cellStyle: { textAlign: 'center' },
+                            render: (val) => (
+                              <Badge variant={val >= 85 ? 'success' : val >= 70 ? 'warning' : 'danger'}>
+                                {val}%
+                              </Badge>
+                            ),
+                          },
+                        ]
+                      : [
+                          {
+                            key: 'no',
+                            label: 'No',
+                            width: '48px',
+                            render: (_, __, i) => (
+                              <span style={{ fontVariantNumeric: 'tabular-nums' }}>
+                                {((summaryResult?.pagination?.page || 1) - 1) * (summaryResult?.pagination?.limit || summaryLimit) + i + 1}
+                              </span>
+                            ),
+                          },
+                          {
+                            key: 'studentName',
+                            label: 'Nama Siswa',
+                            render: (_, row) => (
+                              <button
+                                onClick={() => openStudentProfile(row.studentId)}
+                                style={{ color: 'var(--color-primary)', background: 'none', border: 'none', cursor: 'pointer', fontWeight: 700, padding: 0 }}
+                              >
+                                {row.studentName}
+                              </button>
+                            ),
+                          },
+                          { key: 'class', label: 'Kelas', width: '110px', render: (val) => <Badge variant="primary">{val || '-'}</Badge> },
+                          { key: 'hadir', label: 'H', width: '58px', cellStyle: { textAlign: 'center', fontWeight: 700, color: '#059669' } },
+                          { key: 'izin', label: 'I', width: '58px', cellStyle: { textAlign: 'center', fontWeight: 700, color: '#2563EB' } },
+                          { key: 'sakit', label: 'S', width: '58px', cellStyle: { textAlign: 'center', fontWeight: 700, color: '#D97706' } },
+                          { key: 'alpha', label: 'A', width: '58px', cellStyle: { textAlign: 'center', fontWeight: 700, color: '#DC2626' } },
+                          { key: 'totalSesi', label: 'Total Sesi', width: '90px', cellStyle: { textAlign: 'center', fontWeight: 600 } },
+                          {
+                            key: 'persentase',
+                            label: '% Hadir',
+                            width: '92px',
+                            cellStyle: { textAlign: 'center' },
+                            render: (val) => (
+                              <Badge variant={val >= 85 ? 'success' : val >= 70 ? 'warning' : 'danger'}>
+                                {val}%
+                              </Badge>
+                            ),
+                          },
+                        ]
+                  }
+                  data={activeTab === 'piket' ? (summaryResult?.items || []) : (summaryResult?.rekap || [])}
+                  emptyMessage="Belum ada data rekap absensi pada periode dan filter yang dipilih."
+                />
+                <PaginationBar
+                  pagination={summaryResult?.pagination}
+                  onPageChange={(nextPage) => setSummaryPage(nextPage)}
+                  onLimitChange={(nextLimit) => {
+                    setSummaryLimit(nextLimit);
+                    setSummaryPage(1);
+                  }}
+                  itemLabel="siswa"
+                />
+              </>
+            )}
+          </Card>
+        </>
+      )}
 
       {activeTab === 'piket' && viewMode === 'daily' && (
         <>
@@ -710,57 +1137,59 @@ export default function AbsensiPage() {
         </>
       )}
 
-      {/* Table */}
-      <Card padding={activeTab === 'piket' && viewMode === 'monthly' ? "var(--space-4) 0 0 0" : "0"}>
-        {activeTab === 'piket' ? (
-          viewMode === 'daily' ? (
-            loadingPiket ? (
-              <LoadingSpinner message="Memuat data absensi piket..." />
+      {/* Daily & Monthly Matrix Table */}
+      {viewMode !== 'summary' && (
+        <Card padding={activeTab === 'piket' && viewMode === 'monthly' ? "var(--space-4) 0 0 0" : "0"}>
+          {activeTab === 'piket' ? (
+            viewMode === 'daily' ? (
+              loadingPiket ? (
+                <LoadingSpinner message="Memuat data absensi piket..." />
+              ) : (
+                <Table
+                  columns={[
+                    { key: 'no', label: 'No', width: '50px', render: (_, row, i) => i + 1 },
+                    { key: 'studentName', label: 'Nama Siswa', render: (_, row) => (
+                      <button onClick={() => openStudentProfile(row.studentId)} style={{ color: 'var(--color-primary)', background: 'none', border: 'none', cursor: 'pointer', fontWeight: 'bold', padding: 0 }}>
+                        {row.studentName}
+                      </button>
+                    ) },
+                    { key: 'statusPagi', label: 'Pagi', width: '90px', render: (val) => statusBadge(val) },
+                    { key: 'statusSore', label: 'Sore', width: '90px', render: (val) => statusBadge(val) },
+                    { key: 'warning', label: '', width: '40px',
+                      render: (_, row) => (
+                        row.statusPagi === 'hadir' && row.statusSore === 'alpha'
+                          ? <span title="Terdeteksi bolos" style={{ fontSize: '16px' }}>⚠️</span>
+                          : null
+                      )
+                    },
+                  ]}
+                  data={attendancePiket}
+                  emptyMessage="Belum ada data absensi piket."
+                />
+              )
             ) : (
-              <Table
-                columns={[
-                  { key: 'no', label: 'No', width: '50px', render: (_, row, i) => i + 1 },
-                  { key: 'studentName', label: 'Nama Siswa', render: (_, row) => (
-                    <button onClick={() => openStudentProfile(row.studentId)} style={{ color: 'var(--color-primary)', background: 'none', border: 'none', cursor: 'pointer', fontWeight: 'bold', padding: 0 }}>
-                      {row.studentName}
-                    </button>
-                  ) },
-                  { key: 'statusPagi', label: 'Pagi', width: '90px', render: (val) => statusBadge(val) },
-                  { key: 'statusSore', label: 'Sore', width: '90px', render: (val) => statusBadge(val) },
-                  { key: 'warning', label: '', width: '40px',
-                    render: (_, row) => (
-                      row.statusPagi === 'hadir' && row.statusSore === 'alpha'
-                        ? <span title="Terdeteksi bolos" style={{ fontSize: '16px' }}>⚠️</span>
-                        : null
-                    )
-                  },
-                ]}
-                data={attendancePiket}
-                emptyMessage="Belum ada data absensi piket."
-              />
+              renderRekapTable()
             )
           ) : (
-            renderRekapTable()
-          )
-        ) : (
-          viewMode === 'daily' ? (
-            loadingMapel ? (
-              <LoadingSpinner message="Memuat absensi mapel..." />
-            ) : attendanceMapel.length === 0 ? (
-              <div style={{ textAlign: 'center', padding: 'var(--space-8)', color: 'var(--color-text-muted)' }}>
-                Belum ada data absensi untuk mapel {selectedSubject} pada kelas {selectedClass}.
-              </div>
+            viewMode === 'daily' ? (
+              loadingMapel ? (
+                <LoadingSpinner message="Memuat absensi mapel..." />
+              ) : attendanceMapel.length === 0 ? (
+                <div style={{ textAlign: 'center', padding: 'var(--space-8)', color: 'var(--color-text-muted)' }}>
+                  Belum ada data absensi untuk mapel {selectedSubject} pada kelas {selectedClass}.
+                </div>
+              ) : (
+                <Table
+                  columns={mapelColumns}
+                  data={attendanceMapel}
+                />
+              )
             ) : (
-              <Table 
-                columns={mapelColumns} 
-                data={attendanceMapel} 
-              />
+              renderRekapMapelTable()
             )
-          ) : (
-            renderRekapMapelTable()
-          )
-        )}
-      </Card>
+          )}
+        </Card>
+      )}
 
       <StudentDetailModal 
         isOpen={isProfileModalOpen} 
